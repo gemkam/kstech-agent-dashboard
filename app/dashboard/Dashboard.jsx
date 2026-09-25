@@ -15,6 +15,8 @@ import {
   demoSend,
   clientMarkSent,
   demoSetArea,
+  setSearchRadius,
+  demoExpand,
 } from '../actions'
 
 const STATUS = {
@@ -108,6 +110,11 @@ const DEMO = {
   },
 }
 const DEMO_STEPS = [1, 2, 3, 4, 5, 6]
+const RADIUS_OPTIONS = [0, 10, 20, 40, 60, 80, 100]
+const RADIUS_TOWNS = {
+  10: 'Ghala and Azaiba', 20: 'Seeb and Al Mawaleh', 40: 'Al Khoud and Al Amerat',
+  60: 'Barka and Al Amerat', 80: 'Quriyat and Samail', 100: 'Nakhal and Al Musanaah',
+}
 
 function fmtDate(value) {
   if (!value) return ''
@@ -179,6 +186,8 @@ export default function Dashboard({
   const [demoError, setDemoError] = useState('')
   const [emailFor, setEmailFor] = useState(null) // lead id, or 'all'
   const [place, setPlace] = useState(null) // { area, label } from the viewer's location, demo only
+  const [radius, setRadius] = useState(client.search_radius_km || 0)
+  const [radiusNote, setRadiusNote] = useState('')
 
   const isDemo = client.is_demo
   const demoStep = isDemo ? getDemoStep(leads, outreach) : null
@@ -225,7 +234,7 @@ export default function Dashboard({
       steps = [
         'Reading your company profile',
         here ? `Your location: ${here.label}` : 'Location not shared, searching across Muscat',
-        `Searching business listings near ${area}`,
+        radius ? `Searching up to +${radius} km around ${area}` : `Searching business listings near ${area}`,
         'Searching nearby areas across Muscat',
         'Found 38 businesses, reading their customer reviews',
         '6 businesses matched, saving them to your leads',
@@ -243,6 +252,38 @@ export default function Dashboard({
     if (!res?.error && step.action === 'reset') setPlace(null)
     setAnim(null)
     if (res?.error) setDemoError(res.error)
+    router.refresh()
+  }
+
+  async function changeRadius(km) {
+    setRadius(km)
+    setRadiusNote('')
+    if (!isDemo) {
+      const res = await setSearchRadius({ clientId: client.id, km })
+      setRadiusNote(res?.error || (km === 0
+        ? 'Saved. The agent will search nearby only.'
+        : `Saved. The agent will search up to +${km} km in the next run.`))
+      return
+    }
+    if (km === 0) return
+    if (demoStep < 2) {
+      setRadiusNote(`The agent will search up to +${km} km when you press Start agent.`)
+      return
+    }
+    const base = place?.area || 'Muscat'
+    const steps = [
+      `Expanding search to +${km} km around ${base}`,
+      `Scanning ${RADIUS_TOWNS[km]}`,
+      'Reading reviews of the new businesses',
+      'Found 2 more businesses, adding them to your leads',
+    ]
+    for (let i = 0; i < steps.length; i++) {
+      setAnim({ steps, i })
+      await new Promise((r) => setTimeout(r, 1700))
+    }
+    const res = await demoExpand(km)
+    setAnim(null)
+    if (res?.error) setRadiusNote(res.error)
     router.refresh()
   }
 
@@ -342,15 +383,21 @@ export default function Dashboard({
           progress={anim ? (anim.i + 1) / anim.steps.length : null}
           latestRun={latestRun}
           place={isDemo ? place : null}
+          radius={radius}
+          radiusNote={radiusNote}
+          onRadius={changeRadius}
           focus={focusOn('sec-agent')}
         />
 
-        {isDemo && demoStep === 1 && <DemoProfile name={client.name} place={place} />}
+        {isDemo && demoStep === 1 && <DemoProfile name={client.name} description={client.description} place={place} radius={radius} />}
 
         {show(2) && (
           <section id="sec-pipeline" className={focusOn('sec-pipeline') ? 'pipeline focus' : 'pipeline'} aria-label="Lead pipeline">
             <div className="pipeline-head">
-              <h1>{client.name}</h1>
+              <div className="title-block">
+                <h1>{client.name}</h1>
+                {client.description && <p className="client-desc">{client.description}</p>}
+              </div>
               <div className="pipeline-meta">
                 <p className="muted">
                   {messagesSent} messages sent
@@ -747,17 +794,18 @@ function DemoGuide({ step, busy, onNext, error, draftsLeft }) {
   )
 }
 
-function DemoProfile({ name, place }) {
+function DemoProfile({ name, description, place, radius }) {
   return (
     <section className="panel profile" aria-label="Company profile">
       <h2>{name}</h2>
+      {description && <p className="client-desc">{description}</p>}
       <dl className="facts">
         <dt>Services</dt>
         <dd>AC maintenance, cleaning, pest control, kitchen exhaust cleaning</dd>
         <dt>Ideal customers</dt>
         <dd>Clinics, offices, business centres, restaurants, gyms, training centres</dd>
         <dt>Areas</dt>
-        <dd>{place ? `Near you (${place.label}), then ` : 'Near your location, then '}Al Khuwair, Ghubrah, Qurum, Bousher, Ghala, Ruwi</dd>
+        <dd>{place ? `Near you (${place.label}), then ` : 'Near your location, then '}Al Khuwair, Ghubrah, Qurum, Bousher, Ghala, Ruwi{radius ? `, up to +${radius} km` : ''}</dd>
         <dt>Sends from</dt>
         <dd>sales@gulffacility.example</dd>
         <dt>Per week</dt>
@@ -843,7 +891,7 @@ function AnimatedNumber({ value }) {
   return <>{shown}</>
 }
 
-function AgentBar({ client, isAdmin, running, step, progress, latestRun, place, focus }) {
+function AgentBar({ client, isAdmin, running, step, progress, latestRun, place, radius, radiusNote, onRadius, focus }) {
   const [text, setText] = useState('')
   const [pending, startTransition] = useTransition()
   const [error, setError] = useState('')
@@ -880,15 +928,24 @@ function AgentBar({ client, isAdmin, running, step, progress, latestRun, place, 
               ? `Last run ${fmtDate(latestRun.finished_at)}: ${latestRun.summary || 'completed'}`
               : 'Ready to start'}
         </p>
-        {place && (
-          <p className="agent-place">
+        <div className="agent-place-row">
+          <span className="agent-place">
             <svg viewBox="0 0 24 24" aria-hidden="true" className="pin">
               <path d="M12 22s7-6.5 7-12a7 7 0 1 0-14 0c0 5.5 7 12 7 12z" fill="currentColor" />
-              <circle cx="12" cy="10" r="2.6" fill="var(--sea-deep)" />
+              <circle cx="12" cy="10" r="2.6" fill="var(--bg)" />
             </svg>
-            {place.label}
-          </p>
-        )}
+            {place ? place.label : client.is_demo ? 'Your location' : 'Your service area'}
+          </span>
+          <label className="radius">
+            <span className="sr-only">Search distance</span>
+            <select value={radius} onChange={(e) => onRadius(Number(e.target.value))} disabled={running}>
+              {RADIUS_OPTIONS.map((km) => (
+                <option key={km} value={km}>{km === 0 ? 'Nearby' : `+${km} km`}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+        {radiusNote && <p className="radius-note">{radiusNote}</p>}
         {progress !== null && (
           <span className="agent-progress" aria-hidden="true">
             <span style={{ width: `${progress * 100}%` }} />

@@ -25,7 +25,7 @@ export default async function DashboardPage({ searchParams }) {
   let client = null
 
   if (isAdmin) {
-    const { data } = await supabase.from('clients').select('id, name, slug, is_demo').order('name')
+    const { data } = await supabase.from('clients').select('id, name, slug, is_demo, description, search_radius_km').order('name')
     clients = data || []
     client =
       clients.find((c) => c.slug === searchParams?.client) ||
@@ -34,7 +34,7 @@ export default async function DashboardPage({ searchParams }) {
   } else if (profile.client_id) {
     const { data } = await supabase
       .from('clients')
-      .select('id, name, slug, is_demo')
+      .select('id, name, slug, is_demo, description, search_radius_km')
       .eq('id', profile.client_id)
       .single()
     client = data

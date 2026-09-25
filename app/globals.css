@@ -564,3 +564,23 @@ textarea { width: 100%; resize: vertical; line-height: 1.6; }
   .why-box { max-height: 100dvh; border-radius: 0; outline: 0; padding: max(1.4rem, env(safe-area-inset-top)) 1.2rem max(1.4rem, env(safe-area-inset-bottom)); }
   .why-box .btn { width: 100%; }
 }
+
+/* Company description and search distance */
+.title-block { display: flex; flex-direction: column; gap: 0.45rem; max-width: 62ch; }
+.client-desc { color: var(--text-2); font-size: 0.95rem; line-height: 1.55; }
+.profile .client-desc { margin: -0.4rem 0 1.1rem; }
+.agent-place-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin-top: 0.5rem; }
+.agent-place-row .agent-place { margin-top: 0; }
+.radius select {
+  min-height: 32px; padding: 0.2rem 1.8rem 0.2rem 0.7rem; font-size: 0.82rem; font-weight: 600;
+  color: var(--gold-bright); background-color: var(--gold-soft); border: 1px solid rgba(228, 199, 127, 0.45); border-radius: 999px;
+  -webkit-appearance: none; appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--gold-bright) 50%), linear-gradient(135deg, var(--gold-bright) 50%, transparent 50%);
+  background-position: calc(100% - 13px) 55%, calc(100% - 9px) 55%;
+  background-size: 4px 4px, 4px 4px; background-repeat: no-repeat;
+}
+.radius select:disabled { opacity: 0.5; }
+.radius-note { font-size: 0.8rem; color: var(--gold); margin-top: 0.35rem; }
+@media (max-width: 640px) {
+  .radius select { font-size: 16px; min-height: 36px; }
+}

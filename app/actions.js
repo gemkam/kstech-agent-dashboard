@@ -140,6 +140,24 @@ export async function demoSetArea(area) {
   return { ok: true }
 }
 
+// Client or admin: how far the agent should search (0 = nearby, else +km)
+export async function setSearchRadius({ clientId, km }) {
+  const supabase = createClient()
+  const { data, error } = await supabase.rpc('set_search_radius', { p_client: clientId, p_km: km })
+  if (error || data !== 'ok') return { error: 'Could not change the search area.' }
+  revalidatePath('/dashboard')
+  return { ok: true }
+}
+
+// Demo company only: expanding the radius finds more businesses further out
+export async function demoExpand(km) {
+  const supabase = createClient()
+  const { data, error } = await supabase.rpc('demo_expand', { p_km: km })
+  if (error || data !== 'ok') return { error: 'Could not expand the demo search.' }
+  revalidatePath('/dashboard')
+  return { ok: true }
+}
+
 // Demo company only: approve and "send" drafted emails
 export async function demoSend(ids) {
   const supabase = createClient()
