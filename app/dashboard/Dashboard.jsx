@@ -480,6 +480,7 @@ export default function Dashboard({
                             <td>
                               <span className="biz">{l.business_name}</span>
                               <span className="sub">{l.area}{l.category ? `, ${l.category.replace(/_/g, ' ')}` : ''}</span>
+                              <WhyLead lead={l} />
                             </td>
                             <td>{l.problem_found || <span className="sub">General fit</span>}</td>
                             <td><span className={`pill pill-${l.status}`}>{STATUS[l.status] || l.status}</span></td>
@@ -956,6 +957,73 @@ function Approvals({ drafts, approved, leadById, isAdmin, onOpen, onApproveAll, 
   )
 }
 
+const SOURCE_LABEL = {
+  google_maps: 'Google Maps listing and customer reviews',
+  kudos_center_list: 'Official KUDOS/IC3 testing centre list',
+}
+
+function whyText(lead) {
+  if (lead.why_chosen) return lead.why_chosen
+  const parts = []
+  if (lead.problem_found) parts.push(`We spotted a clear need: ${lead.problem_found.toLowerCase()}.`)
+  if (lead.problem_evidence) parts.push(`Evidence: ${lead.problem_evidence}.`)
+  if (lead.suggested_service) parts.push(`Your service fits it directly: ${lead.suggested_service.toLowerCase()}.`)
+  if (!parts.length) parts.push('This business matches your ideal customer type and service area.')
+  return parts.join(' ')
+}
+
+function WhyLead({ lead, compact = false }) {
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e) => { if (e.key === 'Escape') { e.stopImmediatePropagation(); setOpen(false) } }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [open])
+
+  if (!lead) return null
+  return (
+    <>
+      <button
+        type="button"
+        className={compact ? 'why-btn why-compact' : 'why-btn'}
+        onClick={(e) => { e.stopPropagation(); setOpen(true) }}
+        aria-label={`Why ${lead.business_name} was chosen`}
+      >
+        <span className="why-q" aria-hidden="true">?</span>
+        Why this lead?
+      </button>
+      {open && (
+        <div className="overlay overlay-top overlay-why" onClick={(e) => { e.stopPropagation(); setOpen(false) }}>
+          <div className="why-box" role="dialog" aria-modal="true" aria-label="Why this lead" onClick={(e) => e.stopPropagation()}>
+            <p className="why-kicker">Why this lead</p>
+            <h2>{lead.business_name}</h2>
+            <p className="why-text">{whyText(lead)}</p>
+            <dl className="facts why-facts">
+              {lead.problem_found && (<><dt>Opportunity</dt><dd>{lead.problem_found}</dd></>)}
+              {lead.problem_evidence && (<><dt>Evidence</dt><dd>{lead.problem_evidence}</dd></>)}
+              {lead.suggested_service && (<><dt>Our offer</dt><dd>{lead.suggested_service}</dd></>)}
+              {lead.score != null && (
+                <>
+                  <dt>Match score</dt>
+                  <dd>
+                    <span className="why-score">{lead.score}</span> / 10
+                    <span className="why-meter" aria-hidden="true"><span style={{ width: `${lead.score * 10}%` }} /></span>
+                  </dd>
+                </>
+              )}
+              {(lead.area || lead.category) && (<><dt>Business</dt><dd>{[lead.category?.replace(/_/g, ' '), lead.area].filter(Boolean).join(', ')}</dd></>)}
+              {lead.source && (<><dt>Found via</dt><dd>{SOURCE_LABEL[lead.source] || lead.source.replace(/_/g, ' ')}</dd></>)}
+            </dl>
+            <button className="btn btn-primary" onClick={() => setOpen(false)}>Got it</button>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
 function DraftCard({ o, lead, onOpen }) {
   const [editing, setEditing] = useState(false)
   const [subject, setSubject] = useState(o.subject || '')
@@ -980,7 +1048,10 @@ function DraftCard({ o, lead, onOpen }) {
   return (
     <li className="draft">
       <div className="draft-head">
-        <button className="link-btn" onClick={() => onOpen(o.lead_id)}>{lead?.business_name || 'Lead'}</button>
+        <span className="draft-title">
+          <button className="link-btn" onClick={() => onOpen(o.lead_id)}>{lead?.business_name || 'Lead'}</button>
+          <WhyLead lead={lead} compact />
+        </span>
         <span className="sub">{CHANNEL[o.channel] || o.channel}{lead?.email && o.channel === 'email' ? ` to ${lead.email}` : ''}</span>
       </div>
 
@@ -1100,6 +1171,7 @@ function LeadPanel({ lead, isAdmin, outreach, followups, visits, showVisits, isD
           <div>
             <p className="sub">{lead.ref_code}{lead.area ? `, ${lead.area}` : ''}</p>
             <h2>{lead.business_name}</h2>
+            <WhyLead lead={lead} />
           </div>
           <button className="btn btn-ghost" onClick={onClose}>Close</button>
         </div>
@@ -1296,7 +1368,10 @@ function EmailScreen({ mode, lead, leadOutreach, drafts, leadById, isDemo, demoS
           <div className="mail-body">
             {leadDraft ? (
               <>
-                <p className="badge-wait">Waiting for your approval</p>
+                <div className="mail-top">
+                  <p className="badge-wait">Waiting for your approval</p>
+                  <WhyLead lead={lead} compact />
+                </div>
                 <dl className="mail-fields">
                   <dt>From</dt><dd>{isDemo ? FROM_DEMO : 'Your company email'}</dd>
                   <dt>To</dt><dd>{lead.email || lead.business_name}</dd>

@@ -527,3 +527,40 @@ textarea { width: 100%; resize: vertical; line-height: 1.6; }
   .guide-body h2 { font-size: 1.4rem; }
   .stage-count { font-size: 2.2rem; }
 }
+
+/* Why this lead */
+.why-btn {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  font: inherit; font-size: 0.8rem; font-weight: 600; color: var(--gold-bright);
+  background: var(--gold-soft); border: 1px solid rgba(228, 199, 127, 0.4); border-radius: 999px;
+  padding: 0.25rem 0.7rem 0.25rem 0.3rem; cursor: pointer; margin-top: 0.5rem;
+  transition: background 0.2s, border-color 0.2s;
+}
+.why-btn:hover { background: rgba(201, 162, 75, 0.25); border-color: var(--gold); }
+.why-compact { margin-top: 0; }
+.table .why-btn { margin-top: 0.4rem; font-size: 0.74rem; }
+.why-q {
+  display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--gold); color: #1b1405; font-family: var(--serif); font-weight: 700; font-size: 0.85rem;
+}
+.overlay-why { z-index: 40; }
+.why-box {
+  width: min(520px, 100%); max-height: calc(100dvh - 2rem); overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--gold); outline: 1px solid var(--hair); outline-offset: 5px;
+  border-radius: 2px; padding: 1.6rem; display: flex; flex-direction: column; gap: 0.9rem;
+  animation: rise 0.2s ease-out;
+}
+.why-kicker { color: var(--gold); font-size: 0.8rem; font-weight: 600; }
+.why-box h2 { font-size: 1.7rem; }
+.why-text { font-family: var(--serif); font-size: 1.15rem; line-height: 1.55; color: var(--text); }
+.why-facts { padding-top: 0.9rem; border-top: 1px solid var(--hair); }
+.why-score { font-family: var(--serif); font-size: 1.3rem; font-weight: 700; color: var(--gold-bright); }
+.why-meter { display: block; height: 3px; margin-top: 0.4rem; max-width: 200px; background: var(--hair-2); }
+.why-meter span { display: block; height: 100%; background: linear-gradient(90deg, var(--gold), var(--gold-bright)); }
+.why-box .btn { align-self: flex-start; }
+.draft-title { display: inline-flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.mail-top { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; flex-wrap: wrap; }
+@media (max-width: 640px) {
+  .why-box { max-height: 100dvh; border-radius: 0; outline: 0; padding: max(1.4rem, env(safe-area-inset-top)) 1.2rem max(1.4rem, env(safe-area-inset-bottom)); }
+  .why-box .btn { width: 100%; }
+}
