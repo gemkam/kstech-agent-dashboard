@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import { signOut } from '../actions'
 import Dashboard from './Dashboard'
 
 export const dynamic = 'force-dynamic'
@@ -104,6 +105,9 @@ function Notice({ title, text }) {
       <div className="login-card">
         <h1>{title}</h1>
         <p className="muted">{text}</p>
+        <form action={signOut}>
+          <button type="submit" className="btn btn-primary">Sign out</button>
+        </form>
       </div>
     </main>
   )
