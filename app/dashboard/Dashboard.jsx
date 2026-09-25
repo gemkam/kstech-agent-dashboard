@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState, useTransition } from 'react'
+import { useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
@@ -366,7 +366,7 @@ export default function Dashboard({
                 const prev = i === 0 ? null : stages[i - 1].count
                 return (
                   <li key={s.key} className="stage">
-                    <span className="stage-count">{s.count}</span>
+                    <span className="stage-count"><AnimatedNumber value={s.count} /></span>
                     <span className="stage-label">{s.label}</span>
                     <span className="stage-track" aria-hidden="true">
                       <span className="stage-fill" style={{ width: `${Math.max(pct(s.count, stages[0].count), s.count ? 4 : 0)}%` }} />
@@ -766,27 +766,80 @@ function DemoProfile({ name, place }) {
   )
 }
 
-function Gears({ spinning }) {
-  const big = Array.from({ length: 10 }, (_, i) => i * 36)
-  const small = Array.from({ length: 7 }, (_, i) => i * (360 / 7))
+// Live radar: rotating sweep, rings, and business "blips" that light up as the agent finds them.
+const BLIPS = [
+  [68, 30], [30, 38], [58, 66], [78, 55], [40, 22], [24, 62], [50, 44], [70, 78], [36, 80], [82, 36],
+]
+
+function Radar({ active, progress = null, size = 'md' }) {
+  // how many blips to show: follows progress when known, otherwise cycles while active
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    if (!active || progress !== null) return
+    const t = setInterval(() => setTick((n) => (n + 1) % (BLIPS.length + 3)), 700)
+    return () => clearInterval(t)
+  }, [active, progress])
+  const shown = !active ? 0 : progress !== null ? Math.round(progress * BLIPS.length) : Math.min(tick, BLIPS.length)
+
   return (
-    <svg className={spinning ? 'gears spinning' : 'gears'} viewBox="0 0 96 72" aria-hidden="true">
-      <g className="gear-big">
-        {big.map((a) => (
-          <rect key={a} x="33" y="6" width="8" height="10" rx="2" transform={`rotate(${a} 37 36)`} />
-        ))}
-        <circle cx="37" cy="36" r="22" />
-        <circle cx="37" cy="36" r="8" className="gear-hole" />
-      </g>
-      <g className="gear-small">
-        {small.map((a) => (
-          <rect key={a} x="72.5" y="5" width="7" height="8" rx="2" transform={`rotate(${a} 76 20)`} />
-        ))}
-        <circle cx="76" cy="20" r="11" />
-        <circle cx="76" cy="20" r="4" className="gear-hole" />
-      </g>
-    </svg>
+    <div className={`radar radar-${size}${active ? ' radar-on' : ''}`} aria-hidden="true">
+      <span className="radar-ring r1" />
+      <span className="radar-ring r2" />
+      <span className="radar-ring r3" />
+      <span className="radar-cross" />
+      <span className="radar-sweep" />
+      {BLIPS.map(([x, y], i) => (
+        <span key={i} className={i < shown ? 'blip blip-on' : 'blip'} style={{ left: `${x}%`, top: `${y}%` }} />
+      ))}
+      <span className="radar-core" />
+    </div>
   )
+}
+
+// Types text out letter by letter, like a live feed
+function Typewriter({ text }) {
+  const [out, setOut] = useState('')
+  useEffect(() => {
+    if (!text) { setOut(''); return }
+    let i = 0
+    setOut('')
+    const t = setInterval(() => {
+      i += 1
+      setOut(text.slice(0, i))
+      if (i >= text.length) clearInterval(t)
+    }, 18)
+    return () => clearInterval(t)
+  }, [text])
+  return (
+    <>
+      {out}
+      <span className="caret" aria-hidden="true" />
+    </>
+  )
+}
+
+// Counts up from the previous value when a number changes
+function AnimatedNumber({ value }) {
+  const [shown, setShown] = useState(0)
+  const prev = useRef(0)
+  useEffect(() => {
+    const from = prev.current
+    const to = value
+    prev.current = value
+    if (from === to) { setShown(to); return }
+    const start = performance.now()
+    const dur = 900
+    let raf
+    const step = (now) => {
+      const p = Math.min(1, (now - start) / dur)
+      const eased = 1 - Math.pow(1 - p, 3)
+      setShown(Math.round(from + (to - from) * eased))
+      if (p < 1) raf = requestAnimationFrame(step)
+    }
+    raf = requestAnimationFrame(step)
+    return () => cancelAnimationFrame(raf)
+  }, [value])
+  return <>{shown}</>
 }
 
 function AgentBar({ client, isAdmin, running, step, progress, latestRun, place, focus }) {
@@ -813,7 +866,7 @@ function AgentBar({ client, isAdmin, running, step, progress, latestRun, place, 
 
   return (
     <section id="sec-agent" className={`agent${running ? ' agent-on' : ''}${focus ? ' focus' : ''}`} aria-live="polite">
-      <Gears spinning={running} />
+      <Radar active={running} progress={progress} />
       <div className="agent-text">
         <p className="agent-state">
           <span className="agent-dot" aria-hidden="true" />
@@ -821,7 +874,7 @@ function AgentBar({ client, isAdmin, running, step, progress, latestRun, place, 
         </p>
         <p className="agent-step">
           {running
-            ? step || 'Working on your leads'
+            ? <Typewriter text={step || 'Working on your leads'} />
             : latestRun?.finished_at
               ? `Last run ${fmtDate(latestRun.finished_at)}: ${latestRun.summary || 'completed'}`
               : 'Ready to start'}
@@ -1330,7 +1383,7 @@ function EmailScreen({ mode, lead, leadOutreach, drafts, leadById, isDemo, demoS
 
         {view === 'sending' && (
           <div className="mail-body mail-center">
-            <Gears spinning />
+            <Radar active progress={progress.total ? progress.done / progress.total : null} size="lg" />
             <p className="mail-status">
               {isDemo ? `Sending from ${FROM_DEMO}` : 'Saving your approval'}
             </p>
