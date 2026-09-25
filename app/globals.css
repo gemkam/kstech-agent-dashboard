@@ -647,3 +647,20 @@ textarea { width: 100%; resize: vertical; line-height: 1.6; }
   .summary { padding: 0.9rem 1rem; }
   .summary-line { font-size: 0.98rem; }
 }
+
+/* Clickable demo steps */
+.guide-steps li { padding-top: 0; }
+.guide-step-btn {
+  display: flex; align-items: center; gap: 0.5rem; width: 100%;
+  font: inherit; color: inherit; text-align: left; background: none; border: 0;
+  padding: 0.65rem 0 0.2rem; cursor: pointer; border-radius: 2px;
+}
+.guide-step-btn:disabled { cursor: default; opacity: 0.55; }
+.guide-step-btn:not(:disabled):hover .guide-label { color: var(--gold-bright); }
+.guide-step-btn:not(:disabled):hover .guide-num { border-color: var(--gold); }
+.guide-steps li.viewing { border-top-color: var(--gold-bright); }
+.guide-steps li.viewing .guide-num { box-shadow: 0 0 0 3px var(--gold-soft); }
+.guide-review { border-style: dashed; }
+@media (max-width: 640px) {
+  .guide-step-btn { justify-content: center; }
+}

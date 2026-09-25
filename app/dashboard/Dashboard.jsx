@@ -238,6 +238,7 @@ export default function Dashboard({
   const [emailFor, setEmailFor] = useState(null) // lead id, or 'all'
   const [place, setPlace] = useState(null) // { area, label } from the viewer's location, demo only
   const [radius, setRadius] = useState(client.search_radius_km || 0)
+  const [reviewStep, setReviewStep] = useState(null) // a finished step the viewer tapped to look at again
   const [radiusNote, setRadiusNote] = useState('')
 
   const isDemo = client.is_demo
@@ -387,7 +388,19 @@ export default function Dashboard({
   }
 
   const openLead = openId ? leadById[openId] : null
-  const focusOn = (id) => isDemo && !anim && DEMO[demoStep]?.target === id
+  const viewStep = reviewStep ?? demoStep
+  const focusOn = (id) => isDemo && !anim && DEMO[viewStep]?.target === id
+
+  useEffect(() => { setReviewStep(null) }, [demoStep])
+
+  function pickStep(n) {
+    if (anim) return
+    const next = n === demoStep || (demoStep === 7 && n === 7) ? null : n
+    setReviewStep(next)
+    const id = DEMO[n]?.target
+    const el = id && document.getElementById(id)
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
 
   return (
     <div className="shell">
@@ -427,6 +440,8 @@ export default function Dashboard({
             config={DEMO}
             typeLabel={DEMO_TYPE_LABEL[kind]}
             step={demoStep}
+            viewStep={viewStep}
+            onPick={pickStep}
             busy={Boolean(anim)}
             onNext={runDemoStep}
             error={demoError}
@@ -450,7 +465,7 @@ export default function Dashboard({
           focus={focusOn('sec-agent')}
         />
 
-        {isDemo && demoStep === 1 && <DemoProfile kind={kind} name={client.name} description={client.description} place={place} radius={radius} />}
+        {isDemo && viewStep === 1 && <DemoProfile kind={kind} name={client.name} description={client.description} place={place} radius={radius} />}
 
         {show(2) && (
           <SummaryBar
@@ -909,32 +924,58 @@ function StatusBadge({ isDemo }) {
   )
 }
 
-function DemoGuide({ config: DEMO, typeLabel, step, busy, onNext, error, draftsLeft }) {
-  const s = DEMO[step]
+function DemoGuide({ config: DEMO, typeLabel, step, viewStep, onPick, busy, onNext, error, draftsLeft }) {
+  const reviewing = viewStep !== step
+  const s = DEMO[viewStep]
   const current = Math.min(step, 6)
   return (
-    <section className="guide" aria-label="Demo guide">
+    <section className={reviewing ? 'guide guide-review' : 'guide'} aria-label="Demo guide">
       <ol className="guide-steps">
-        {DEMO_STEPS.map((n) => (
-          <li key={n} className={n < step ? 'done' : n === current && step < 7 ? 'current' : ''}>
-            <span className="guide-num">{n}</span>
-            <span className="guide-label">{DEMO[n].label}</span>
-          </li>
-        ))}
+        {DEMO_STEPS.map((n) => {
+          const reached = n <= step
+          const cls = [
+            n < step ? 'done' : '',
+            n === current && step < 7 ? 'current' : '',
+            n === viewStep ? 'viewing' : '',
+          ].filter(Boolean).join(' ')
+          return (
+            <li key={n} className={cls}>
+              <button
+                type="button"
+                className="guide-step-btn"
+                onClick={() => onPick(n)}
+                disabled={!reached || busy}
+                aria-current={n === viewStep ? 'step' : undefined}
+                title={reached ? `Show step ${n}: ${DEMO[n].label}` : 'Reach this step first'}
+              >
+                <span className="guide-num">{n}</span>
+                <span className="guide-label">{DEMO[n].label}</span>
+              </button>
+            </li>
+          )
+        })}
       </ol>
       <div className="guide-body">
         <div>
-          <p className="guide-kicker">{typeLabel} demo, {step < 7 ? `step ${step} of 6` : 'complete'}</p>
+          <p className="guide-kicker">
+            {reviewing
+              ? `Looking back at step ${viewStep} of 6`
+              : `${typeLabel} demo, ${step < 7 ? `step ${step} of 6` : 'complete'}`}
+          </p>
           <h2>{s.title}</h2>
           <p className="guide-text">{s.text}</p>
-          {step === 3 && (
+          {!reviewing && step === 3 && (
             <p className="guide-hint">
               {draftsLeft} message{draftsLeft === 1 ? '' : 's'} left to review below.
             </p>
           )}
           {error && <p className="error">{error}</p>}
         </div>
-        {s.button && (
+        {reviewing ? (
+          <button className="btn btn-quiet btn-lg" onClick={() => onPick(step)}>
+            Back to {step < 7 ? `step ${step}` : 'the end'}
+          </button>
+        ) : s.button && (
           <button className={step === 7 ? 'btn btn-plain' : 'btn btn-brass btn-lg'} onClick={onNext} disabled={busy}>
             {busy ? 'Working...' : s.button}
           </button>
