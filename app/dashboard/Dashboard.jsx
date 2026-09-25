@@ -12,6 +12,7 @@ import {
   startAgentRun,
   finishAgentRun,
   demoAction,
+  demoSend,
 } from '../actions'
 
 const STATUS = {
@@ -132,9 +133,9 @@ function getDemoStep(leads, outreach) {
   const has = (s) => outreach.some((o) => o.status === s)
   if (leads.some((l) => MEETING.includes(l.status))) return 7
   if (has('replied')) return 6
-  if (has('sent')) return 5
   if (has('draft')) return 3
   if (has('approved')) return 4
+  if (has('sent')) return 5
   return 2
 }
 
@@ -147,6 +148,7 @@ export default function Dashboard({
   const [openId, setOpenId] = useState(null)
   const [anim, setAnim] = useState(null) // { steps: [], i: 0 }
   const [demoError, setDemoError] = useState('')
+  const [emailFor, setEmailFor] = useState(null) // lead id, or 'all'
 
   const isDemo = client.is_demo
   const demoStep = isDemo ? getDemoStep(leads, outreach) : null
@@ -365,6 +367,7 @@ export default function Dashboard({
                   leadById={leadById}
                   isAdmin={isAdmin}
                   onOpen={setOpenId}
+                  onApproveAll={() => setEmailFor('all')}
                   focus={focusOn('sec-approvals')}
                 />
               )}
@@ -435,7 +438,23 @@ export default function Dashboard({
           followups={followupsByLead[openLead.id] || []}
           visits={visitCounts[openLead.ref_code] || 0}
           showVisits={isAdmin && client.slug === 'kstech'}
+          isDemo={isDemo}
+          onEmail={() => setEmailFor(openLead.id)}
           onClose={() => setOpenId(null)}
+        />
+      )}
+
+      {emailFor && (
+        <EmailScreen
+          mode={emailFor === 'all' ? 'all' : 'single'}
+          lead={emailFor === 'all' ? null : leadById[emailFor]}
+          leadOutreach={emailFor === 'all' ? [] : outreachByLead[emailFor] || []}
+          drafts={drafts}
+          leadById={leadById}
+          isDemo={isDemo}
+          demoStep={demoStep}
+          onClose={() => setEmailFor(null)}
+          onRefresh={() => router.refresh()}
         />
       )}
     </div>
@@ -586,24 +605,15 @@ function AgentBar({ client, isAdmin, running, step, progress, latestRun, focus }
   )
 }
 
-function Approvals({ drafts, approved, leadById, isAdmin, onOpen, focus }) {
-  const [pending, startTransition] = useTransition()
-
-  function approveAll() {
-    startTransition(async () => {
-      for (const o of drafts) {
-        await reviewOutreach({ id: o.id, action: 'approve' })
-      }
-    })
-  }
+function Approvals({ drafts, approved, leadById, isAdmin, onOpen, onApproveAll, focus }) {
 
   return (
     <section id="sec-approvals" className={focus ? 'panel approvals focus' : 'panel approvals'} aria-label="Emails waiting for approval">
       <div className="panel-head">
         <h2>Waiting for your approval <span className="count">{drafts.length}</span></h2>
         {drafts.length > 1 && (
-          <button className="btn btn-quiet" onClick={approveAll} disabled={pending}>
-            {pending ? 'Approving...' : 'Approve all'}
+          <button className="btn btn-quiet" onClick={onApproveAll}>
+            Approve all ({drafts.length})
           </button>
         )}
       </div>
@@ -723,7 +733,7 @@ function ApprovedRow({ o, lead, isAdmin }) {
   )
 }
 
-function LeadPanel({ lead, isAdmin, outreach, followups, visits, showVisits, onClose }) {
+function LeadPanel({ lead, isAdmin, outreach, followups, visits, showVisits, isDemo, onEmail, onClose }) {
   const [status, setStatus] = useState(lead.status)
   const [notes, setNotes] = useState(lead.notes || '')
   const [message, setMessage] = useState('')
@@ -762,11 +772,13 @@ function LeadPanel({ lead, isAdmin, outreach, followups, visits, showVisits, onC
 
         <div className="drawer-body">
           <div className="contact-row">
-            {lead.phone && <a className="btn btn-quiet" href={`tel:${lead.phone.replace(/\s/g, '')}`}>Call</a>}
-            {lead.phone && <a className="btn btn-quiet" href={`https://wa.me/${lead.phone.replace(/\D/g, '')}`} target="_blank" rel="noreferrer">WhatsApp</a>}
-            {lead.email && <a className="btn btn-quiet" href={`mailto:${lead.email}`}>Email</a>}
-            {lead.google_maps_url && <a className="btn btn-quiet" href={lead.google_maps_url} target="_blank" rel="noreferrer">Map</a>}
-            {lead.website && <a className="btn btn-quiet" href={lead.website} target="_blank" rel="noreferrer">Website</a>}
+            <button className="btn btn-primary" onClick={onEmail}>
+              {outreach.some((o) => o.status === 'draft') ? 'Email: review draft' : 'Email'}
+            </button>
+            {!isDemo && lead.phone && <a className="btn btn-quiet" href={`tel:${lead.phone.replace(/\s/g, '')}`}>Call</a>}
+            {!isDemo && lead.phone && <a className="btn btn-quiet" href={`https://wa.me/${lead.phone.replace(/\D/g, '')}`} target="_blank" rel="noreferrer">WhatsApp</a>}
+            {!isDemo && lead.google_maps_url && <a className="btn btn-quiet" href={lead.google_maps_url} target="_blank" rel="noreferrer">Map</a>}
+            {!isDemo && lead.website && <a className="btn btn-quiet" href={lead.website} target="_blank" rel="noreferrer">Website</a>}
           </div>
 
           <dl className="facts">
@@ -847,6 +859,230 @@ function LeadPanel({ lead, isAdmin, outreach, followups, visits, showVisits, onC
           </section>
         </div>
       </aside>
+    </div>
+  )
+}
+
+const FROM_DEMO = 'sales@gulffacility.example'
+
+function EmailScreen({ mode, lead, leadOutreach, drafts, leadById, isDemo, demoStep, onClose, onRefresh }) {
+  const leadDraft = leadOutreach.find((o) => o.status === 'draft')
+  const history = leadOutreach.filter((o) => o.status !== 'draft')
+  const [view, setView] = useState(mode === 'all' ? 'all' : 'single')
+  const [editing, setEditing] = useState(false)
+  const [subject, setSubject] = useState(leadDraft?.subject || '')
+  const [body, setBody] = useState(leadDraft?.message_draft || '')
+  const [progress, setProgress] = useState({ done: 0, total: 0, names: [] })
+  const [result, setResult] = useState(null) // { kind: 'sent' | 'approved' | 'rejected', names: [] }
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [writing, setWriting] = useState(false)
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.stopImmediatePropagation(); if (!busy) onClose() }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [busy, onClose])
+
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms))
+
+  async function approveList(list, edits) {
+    setError('')
+    setBusy(true)
+    const names = list.map((o) => leadById[o.lead_id]?.business_name || 'Lead')
+    setView('sending')
+    setProgress({ done: 0, total: list.length, names })
+
+    // Save edits first (approves that one email)
+    if (edits) {
+      const res = await reviewOutreach({ id: list[0].id, action: 'approve', message: edits.body, subject: edits.subject })
+      if (res?.error) { setError(res.error); setBusy(false); setView('single'); return }
+    }
+
+    if (isDemo) {
+      for (let i = 0; i < list.length; i++) {
+        await wait(900)
+        setProgress({ done: i + 1, total: list.length, names })
+      }
+      const res = await demoSend(list.map((o) => o.id))
+      if (res?.error) { setError(res.error); setBusy(false); setView('single'); return }
+      setResult({ kind: 'sent', names })
+    } else {
+      for (let i = 0; i < list.length; i++) {
+        if (!(edits && i === 0)) {
+          const res = await reviewOutreach({ id: list[i].id, action: 'approve' })
+          if (res?.error) { setError(res.error); break }
+        }
+        setProgress({ done: i + 1, total: list.length, names })
+      }
+      setResult({ kind: 'approved', names })
+    }
+    setBusy(false)
+    setView('done')
+    onRefresh()
+  }
+
+  async function reject() {
+    setBusy(true)
+    const res = await reviewOutreach({ id: leadDraft.id, action: 'reject' })
+    setBusy(false)
+    if (res?.error) { setError(res.error); return }
+    setResult({ kind: 'rejected', names: [lead.business_name] })
+    setView('done')
+    onRefresh()
+  }
+
+  async function askAgentToWrite() {
+    setWriting(true)
+    setError('')
+    await wait(2500)
+    const res = await demoAction('draft')
+    setWriting(false)
+    if (res?.error) setError(res.error)
+    onClose()
+    onRefresh()
+  }
+
+  return (
+    <div className="overlay overlay-top" onClick={() => !busy && onClose()}>
+      <div className="mail" role="dialog" aria-modal="true" aria-label="Email" onClick={(e) => e.stopPropagation()}>
+        <div className="mail-head">
+          <h2>
+            {view === 'all' ? `Approve all emails (${drafts.length})`
+              : view === 'sending' ? (isDemo ? 'Sending' : 'Approving')
+              : view === 'done' ? 'Done'
+              : `Email to ${lead?.business_name}`}
+          </h2>
+          <button className="btn btn-plain" onClick={onClose} disabled={busy}>Close</button>
+        </div>
+
+        {view === 'single' && (
+          <div className="mail-body">
+            {leadDraft ? (
+              <>
+                <p className="badge-wait">Waiting for your approval</p>
+                <dl className="mail-fields">
+                  <dt>From</dt><dd>{isDemo ? FROM_DEMO : 'Your company email'}</dd>
+                  <dt>To</dt><dd>{lead.email || lead.business_name}</dd>
+                  <dt>Subject</dt>
+                  <dd>
+                    {editing
+                      ? <input value={subject} onChange={(e) => setSubject(e.target.value)} aria-label="Subject" />
+                      : subject}
+                  </dd>
+                </dl>
+                {editing
+                  ? <textarea rows={10} value={body} onChange={(e) => setBody(e.target.value)} aria-label="Message" />
+                  : <p className="mail-text">{body}</p>}
+                {error && <p className="error">{error}</p>}
+                <div className="mail-actions">
+                  <button className="btn btn-brass btn-lg" disabled={busy}
+                    onClick={() => approveList([leadDraft], editing ? { subject, body } : null)}>
+                    {isDemo ? 'Approve and send' : 'Approve'}
+                  </button>
+                  {!editing && <button className="btn btn-quiet" onClick={() => setEditing(true)} disabled={busy}>Edit</button>}
+                  {editing && <button className="btn btn-plain" onClick={() => { setEditing(false); setSubject(leadDraft.subject || ''); setBody(leadDraft.message_draft || '') }}>Cancel edit</button>}
+                  <button className="btn btn-plain" onClick={reject} disabled={busy}>Reject</button>
+                  {drafts.length > 1 && (
+                    <button className="link-btn small push-right" onClick={() => setView('all')} disabled={busy}>
+                      Approve all ({drafts.length})
+                    </button>
+                  )}
+                </div>
+              </>
+            ) : history.length > 0 ? (
+              <>
+                {history.map((o) => (
+                  <div key={o.id} className="mail-sent">
+                    <p className={o.status === 'rejected' ? 'badge-reject' : 'badge-sent'}>
+                      {o.status === 'rejected' ? 'Rejected'
+                        : o.status === 'approved' ? 'Approved, waiting to be sent'
+                        : o.status === 'replied' ? `Sent ${fmtDate(o.sent_at)}, replied ${fmtDate(o.replied_at)}`
+                        : `Sent ${fmtDate(o.sent_at)}`}
+                    </p>
+                    {o.subject && <p className="draft-subject">{o.subject}</p>}
+                    <p className="mail-text">{o.message_sent || o.message_draft}</p>
+                  </div>
+                ))}
+              </>
+            ) : (
+              <div className="mail-empty">
+                <p>The agent has not written an email for {lead?.business_name} yet.</p>
+                {isDemo && demoStep === 2 && (
+                  <button className="btn btn-brass btn-lg" onClick={askAgentToWrite} disabled={writing}>
+                    {writing ? 'Writing emails...' : 'Ask the agent to write emails'}
+                  </button>
+                )}
+                {error && <p className="error">{error}</p>}
+              </div>
+            )}
+          </div>
+        )}
+
+        {view === 'all' && (
+          <div className="mail-body">
+            <p className="muted">Read through the emails, then approve them together.</p>
+            <ul className="mail-list">
+              {drafts.map((o) => (
+                <li key={o.id}>
+                  <details>
+                    <summary>
+                      <span className="biz">{leadById[o.lead_id]?.business_name}</span>
+                      <span className="sub">{o.subject}</span>
+                    </summary>
+                    <p className="mail-text">{o.message_draft}</p>
+                  </details>
+                </li>
+              ))}
+            </ul>
+            {error && <p className="error">{error}</p>}
+            <div className="mail-actions">
+              <button className="btn btn-brass btn-lg" disabled={busy || drafts.length === 0} onClick={() => approveList(drafts, null)}>
+                {isDemo ? `Approve and send all ${drafts.length}` : `Approve all ${drafts.length}`}
+              </button>
+              {lead && <button className="btn btn-plain" onClick={() => setView('single')}>Back</button>}
+            </div>
+          </div>
+        )}
+
+        {view === 'sending' && (
+          <div className="mail-body mail-center">
+            <Gears spinning />
+            <p className="mail-status">
+              {isDemo ? `Sending from ${FROM_DEMO}` : 'Saving your approval'}
+            </p>
+            <ul className="send-list">
+              {progress.names.map((n, i) => (
+                <li key={n + i} className={i < progress.done ? 'ok-row' : ''}>
+                  <span>{n}</span>
+                  <span>{i < progress.done ? (isDemo ? 'Sent' : 'Approved') : 'Waiting'}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {view === 'done' && result && (
+          <div className="mail-body mail-center">
+            <span className={result.kind === 'rejected' ? 'done-mark done-mark-muted' : 'done-mark'} aria-hidden="true">
+              {result.kind === 'rejected' ? '×' : '✓'}
+            </span>
+            <p className="mail-status">
+              {result.kind === 'sent' && `${result.names.length} email${result.names.length === 1 ? '' : 's'} sent`}
+              {result.kind === 'approved' && `${result.names.length} email${result.names.length === 1 ? '' : 's'} approved`}
+              {result.kind === 'rejected' && 'Email rejected'}
+            </p>
+            <p className="muted center">
+              {result.kind === 'sent' && 'Replies will come to your inbox. The agent schedules a follow-up in 2 days for anyone who does not reply.'}
+              {result.kind === 'approved' && 'KS Tech sends approved emails from your company email. You will see them move to Contacted.'}
+              {result.kind === 'rejected' && 'This email will not be sent. The agent will not contact this business unless you ask.'}
+            </p>
+            <button className="btn btn-primary" onClick={onClose}>Back to dashboard</button>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

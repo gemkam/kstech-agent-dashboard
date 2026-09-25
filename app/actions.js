@@ -122,6 +122,15 @@ export async function demoAction(action) {
   return { ok: true }
 }
 
+// Demo company only: approve and "send" drafted emails
+export async function demoSend(ids) {
+  const supabase = createClient()
+  const { data, error } = await supabase.rpc('demo_send', { p_ids: ids })
+  if (error || data < 0) return { error: 'Sending is only simulated for the demo company.' }
+  revalidatePath('/dashboard')
+  return { ok: true, sent: data }
+}
+
 export async function updateProfile(formData) {
   const supabase = createClient()
   const userId = formData.get('user_id')
