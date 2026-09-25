@@ -111,11 +111,13 @@ export async function finishAgentRun({ runId, clientId, summary }) {
   return { ok: true }
 }
 
-// Demo company only: create sample leads and drafts after the animated run
-export async function completeDemoRun() {
+// Demo company only: guided demo steps (reset, find, draft, send, replies, results)
+export async function demoAction(action) {
+  const allowed = ['reset', 'find', 'draft', 'send', 'replies', 'results']
+  if (!allowed.includes(action)) return { error: 'Unknown demo step.' }
   const supabase = createClient()
-  const { data, error } = await supabase.rpc('demo_agent_complete')
-  if (error || data !== 'ok') return { error: 'Demo run is only available for the demo company.' }
+  const { data, error } = await supabase.rpc('demo_action', { p_action: action })
+  if (error || data !== 'ok') return { error: 'Demo steps only work on the demo company.' }
   revalidatePath('/dashboard')
   return { ok: true }
 }

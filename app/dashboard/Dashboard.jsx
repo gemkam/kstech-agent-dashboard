@@ -11,7 +11,7 @@ import {
   markSent,
   startAgentRun,
   finishAgentRun,
-  completeDemoRun,
+  demoAction,
 } from '../actions'
 
 const STATUS = {
@@ -30,14 +30,81 @@ const REPLIED = ['replied', 'meeting', 'won']
 const MEETING = ['meeting', 'won']
 const CHANNEL = { email: 'Email', whatsapp: 'WhatsApp', call: 'Call', visit: 'Visit' }
 
-const DEMO_STEPS = [
-  'Connecting to business listings',
-  'Searching businesses in Al Khuwair, Ghubrah and Qurum',
-  'Found 38 businesses, reading their reviews',
-  'Checking which ones match your ideal customer',
-  '3 businesses matched, writing personalized emails',
-  'Saving drafts for your approval',
-]
+// Guided demo: what each step says, which button moves it on, and the animation shown
+const DEMO = {
+  1: {
+    label: 'Profile',
+    title: 'Your company profile',
+    text: 'We start by learning what you sell and who you want as customers. The agent uses this to search for the right businesses.',
+    button: 'Start agent',
+    action: 'find',
+    anim: [
+      'Reading your company profile',
+      'Searching business listings in Al Khuwair and Ghubrah',
+      'Searching Qurum, Bousher, Ghala and Ruwi',
+      'Found 38 businesses, reading their customer reviews',
+      'Checking which ones match your ideal customer',
+      '6 businesses matched, saving them to your leads',
+    ],
+    target: 'sec-agent',
+  },
+  2: {
+    label: 'Find',
+    title: 'The agent found 6 businesses',
+    text: 'Each lead shows why it fits: a problem spotted in its reviews that your service solves. Open any lead to see the details.',
+    button: 'Write emails',
+    action: 'draft',
+    anim: [
+      'Reading each business and its problem',
+      'Writing a personalized email for each one',
+      'Checking tone and length',
+      'Saving drafts for your approval',
+    ],
+    target: 'sec-leads',
+  },
+  3: {
+    label: 'Approve',
+    title: 'You approve every email',
+    text: 'Read each email, then approve, edit or reject it. Nothing is sent without your approval.',
+    target: 'sec-approvals',
+  },
+  4: {
+    label: 'Send',
+    title: 'Approved emails are sent',
+    text: 'Emails go out from your own company email address, so replies come straight to you.',
+    button: 'Send approved emails',
+    action: 'send',
+    anim: ['Sending approved emails from your company email', 'Scheduling follow-ups for each business'],
+    target: 'sec-approvals',
+  },
+  5: {
+    label: 'Replies',
+    title: 'Waiting for replies',
+    text: 'The agent tracks who replies. Businesses that do not reply get a polite follow-up after two days.',
+    button: 'Show 2 days later',
+    action: 'replies',
+    anim: ['Two days later', 'Checking replies'],
+    target: 'sec-pipeline',
+  },
+  6: {
+    label: 'Results',
+    title: '2 businesses replied',
+    text: 'Replies arrive in your inbox and show here. Follow-ups for the others are due today. You handle the conversations and close the deals.',
+    button: 'Show 1 week later',
+    action: 'results',
+    anim: ['One week later', 'Updating your results'],
+    target: 'sec-activity',
+  },
+  7: {
+    label: 'Done',
+    title: 'One week in: a meeting booked and a contract won',
+    text: 'This is the full cycle: find, write, approve, send, follow up, close. It repeats every week with new businesses.',
+    button: 'Restart demo',
+    action: 'reset',
+    target: 'sec-pipeline',
+  },
+}
+const DEMO_STEPS = [1, 2, 3, 4, 5, 6]
 
 function fmtDate(value) {
   if (!value) return ''
@@ -60,6 +127,17 @@ function pct(part, whole) {
   return Math.round((part / whole) * 100)
 }
 
+function getDemoStep(leads, outreach) {
+  if (leads.length === 0) return 1
+  const has = (s) => outreach.some((o) => o.status === s)
+  if (leads.some((l) => MEETING.includes(l.status))) return 7
+  if (has('replied')) return 6
+  if (has('sent')) return 5
+  if (has('draft')) return 3
+  if (has('approved')) return 4
+  return 2
+}
+
 export default function Dashboard({
   isAdmin, userEmail, clients, client, leads, outreach, followups, visitCounts, today, latestRun, events,
 }) {
@@ -67,12 +145,15 @@ export default function Dashboard({
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState('all')
   const [openId, setOpenId] = useState(null)
-  const [demoStep, setDemoStep] = useState(-1)
-  const [flash, setFlash] = useState('')
+  const [anim, setAnim] = useState(null) // { steps: [], i: 0 }
+  const [demoError, setDemoError] = useState('')
 
-  const demoRunning = demoStep >= 0
+  const isDemo = client.is_demo
+  const demoStep = isDemo ? getDemoStep(leads, outreach) : null
+  const show = (minStep) => !isDemo || demoStep >= minStep
+
   const liveRunning = latestRun?.status === 'running'
-  const running = demoRunning || liveRunning
+  const running = Boolean(anim) || liveRunning
 
   // Refresh every 15 s while a real run is live, so clients see progress
   useEffect(() => {
@@ -81,16 +162,27 @@ export default function Dashboard({
     return () => clearInterval(t)
   }, [liveRunning, router])
 
-  async function runDemo() {
-    setFlash('')
-    for (let i = 0; i < DEMO_STEPS.length; i++) {
-      setDemoStep(i)
-      await new Promise((r) => setTimeout(r, 2200))
+  // In the demo, bring the section for the current step into view
+  useEffect(() => {
+    if (!isDemo || anim) return
+    const id = DEMO[demoStep]?.target
+    const el = id && document.getElementById(id)
+    if (el && demoStep > 1) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [isDemo, demoStep, anim])
+
+  async function runDemoStep() {
+    const step = DEMO[demoStep]
+    if (!step?.action) return
+    setDemoError('')
+    const steps = step.anim || []
+    for (let i = 0; i < steps.length; i++) {
+      setAnim({ steps, i })
+      await new Promise((r) => setTimeout(r, step.action === 'find' ? 2000 : 1600))
     }
-    const res = await completeDemoRun()
-    setDemoStep(-1)
+    const res = await demoAction(step.action)
+    setAnim(null)
+    if (res?.error) setDemoError(res.error)
     router.refresh()
-    setFlash(res?.error || '3 new emails are waiting for your approval')
   }
 
   const outreachByLead = useMemo(() => {
@@ -139,6 +231,7 @@ export default function Dashboard({
   }
 
   const openLead = openId ? leadById[openId] : null
+  const focusOn = (id) => isDemo && !anim && DEMO[demoStep]?.target === id
 
   return (
     <div className="shell">
@@ -168,143 +261,169 @@ export default function Dashboard({
       </header>
 
       <main className="content">
+        {isDemo && (
+          <DemoGuide
+            step={demoStep}
+            busy={Boolean(anim)}
+            onNext={runDemoStep}
+            error={demoError}
+            draftsLeft={drafts.length}
+          />
+        )}
+
         <AgentBar
           client={client}
           isAdmin={isAdmin}
           running={running}
-          step={demoRunning ? DEMO_STEPS[demoStep] : latestRun?.current_step}
-          stepIndex={demoRunning ? demoStep : null}
+          step={anim ? anim.steps[anim.i] : latestRun?.current_step}
+          progress={anim ? (anim.i + 1) / anim.steps.length : null}
           latestRun={latestRun}
-          onRunDemo={runDemo}
-          flash={flash}
+          focus={focusOn('sec-agent')}
         />
 
-        <section className="pipeline" aria-label="Lead pipeline">
-          <div className="pipeline-head">
-            <h1>{client.name}</h1>
-            <p className="muted">
-              {messagesSent} messages sent
-              {dueFollowups.length > 0 && <> and {dueFollowups.length} follow-up{dueFollowups.length === 1 ? '' : 's'} due</>}
-            </p>
-          </div>
-          <ol className="stages">
-            {stages.map((s, i) => {
-              const prev = i === 0 ? null : stages[i - 1].count
-              return (
-                <li key={s.key} className="stage">
-                  <span className="stage-count">{s.count}</span>
-                  <span className="stage-label">{s.label}</span>
-                  <span className="stage-track" aria-hidden="true">
-                    <span className="stage-fill" style={{ width: `${Math.max(pct(s.count, stages[0].count), s.count ? 4 : 0)}%` }} />
-                  </span>
-                  {prev !== null && <span className="stage-rate">{pct(s.count, prev)}% of previous step</span>}
-                </li>
-              )
-            })}
-          </ol>
-        </section>
+        {isDemo && demoStep === 1 && <DemoProfile name={client.name} />}
 
-        <div className="grid">
-          <div className="side">
-            <section className="panel" aria-label="Agent activity">
-              <h2>Agent activity</h2>
-              {events.length === 0 ? (
-                <p className="empty">The agent's work appears here: searches, drafts, approvals and replies.</p>
-              ) : (
-                <ul className="timeline">
-                  {events.map((e) => (
-                    <li key={e.id} className={`tl tl-${e.kind}`}>
-                      <span className="tl-dot" aria-hidden="true" />
-                      <span className="tl-msg">{e.message}</span>
-                      <span className="tl-time">{timeAgo(e.created_at)}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
+        {show(2) && (
+          <section id="sec-pipeline" className={focusOn('sec-pipeline') ? 'pipeline focus' : 'pipeline'} aria-label="Lead pipeline">
+            <div className="pipeline-head">
+              <h1>{client.name}</h1>
+              <p className="muted">
+                {messagesSent} messages sent
+                {dueFollowups.length > 0 && <> and {dueFollowups.length} follow-up{dueFollowups.length === 1 ? '' : 's'} due</>}
+              </p>
+            </div>
+            <ol className="stages">
+              {stages.map((s, i) => {
+                const prev = i === 0 ? null : stages[i - 1].count
+                return (
+                  <li key={s.key} className="stage">
+                    <span className="stage-count">{s.count}</span>
+                    <span className="stage-label">{s.label}</span>
+                    <span className="stage-track" aria-hidden="true">
+                      <span className="stage-fill" style={{ width: `${Math.max(pct(s.count, stages[0].count), s.count ? 4 : 0)}%` }} />
+                    </span>
+                    {prev !== null && <span className="stage-rate">{pct(s.count, prev)}% of previous step</span>}
+                  </li>
+                )
+              })}
+            </ol>
+          </section>
+        )}
 
-            <section className="panel" aria-label="Follow-ups due">
-              <h2>Follow-ups due</h2>
-              {dueFollowups.length === 0 ? (
-                <p className="empty">Nothing due today. New follow-ups appear here on their due date.</p>
-              ) : (
-                <ul className="fu-list">
-                  {dueFollowups.map((f) => {
-                    const lead = leadById[f.lead_id]
-                    const overdue = f.due_date < today
-                    return (
-                      <li key={f.id}>
-                        <button className="fu-item" onClick={() => setOpenId(f.lead_id)}>
-                          <span className="fu-name">{lead?.business_name || 'Lead'}</span>
-                          <span className={overdue ? 'fu-date overdue' : 'fu-date'}>
-                            {overdue ? `Overdue since ${fmtDate(f.due_date)}` : 'Due today'}
-                          </span>
-                        </button>
+        {show(2) && (
+          <div className="grid">
+            <div className="side">
+              <section id="sec-activity" className={focusOn('sec-activity') ? 'panel focus' : 'panel'} aria-label="Agent activity">
+                <h2>Agent activity</h2>
+                {events.length === 0 ? (
+                  <p className="empty">The agent's work appears here: searches, drafts, approvals and replies.</p>
+                ) : (
+                  <ul className="timeline">
+                    {events.map((e) => (
+                      <li key={e.id} className={`tl tl-${e.kind}`}>
+                        <span className="tl-dot" aria-hidden="true" />
+                        <span className="tl-msg">{e.message}</span>
+                        <span className="tl-time">{timeAgo(e.created_at)}</span>
                       </li>
-                    )
-                  })}
-                </ul>
-              )}
-            </section>
-          </div>
-
-          <div className="main-col">
-            <Approvals drafts={drafts} approved={approved} leadById={leadById} isAdmin={isAdmin} onOpen={setOpenId} />
-
-            <section className="panel leads" aria-label="Leads">
-              <div className="leads-head">
-                <h2>Leads <span className="count">{visibleLeads.length}</span></h2>
-                <div className="leads-tools">
-                  <input type="search" placeholder="Search name, area, category" value={query}
-                    onChange={(e) => setQuery(e.target.value)} aria-label="Search leads" />
-                  <select value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter by status">
-                    <option value="all">All statuses ({leads.length})</option>
-                    {STATUS_ORDER.filter((s) => statusCounts[s]).map((s) => (
-                      <option key={s} value={s}>{STATUS[s]} ({statusCounts[s]})</option>
                     ))}
-                  </select>
-                </div>
-              </div>
+                  </ul>
+                )}
+              </section>
 
-              {visibleLeads.length === 0 ? (
-                <p className="empty">
-                  {leads.length === 0
-                    ? 'No leads yet. Your first researched businesses will appear here.'
-                    : 'No leads match this search. Clear the search or pick another status.'}
-                </p>
-              ) : (
-                <div className="table-wrap">
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th scope="col">Business</th>
-                        <th scope="col">Area</th>
-                        <th scope="col">Status</th>
-                        <th scope="col" className="num">Score</th>
-                        <th scope="col">Last contact</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {visibleLeads.map((l) => (
-                        <tr key={l.id} onClick={() => setOpenId(l.id)} tabIndex={0}
-                          onKeyDown={(e) => { if (e.key === 'Enter') setOpenId(l.id) }}>
-                          <td>
-                            <span className="biz">{l.business_name}</span>
-                            <span className="sub">{l.ref_code}{l.category ? `, ${l.category.replace(/_/g, ' ')}` : ''}</span>
-                          </td>
-                          <td>{l.area || ''}</td>
-                          <td><span className={`pill pill-${l.status}`}>{STATUS[l.status] || l.status}</span></td>
-                          <td className="num">{l.score ?? ''}</td>
-                          <td>{fmtDate(lastContact(l.id)) || <span className="sub">Not yet</span>}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+              {show(5) && (
+                <section className="panel" aria-label="Follow-ups due">
+                  <h2>Follow-ups due</h2>
+                  {dueFollowups.length === 0 ? (
+                    <p className="empty">Nothing due today. New follow-ups appear here on their due date.</p>
+                  ) : (
+                    <ul className="fu-list">
+                      {dueFollowups.map((f) => {
+                        const lead = leadById[f.lead_id]
+                        const overdue = f.due_date < today
+                        return (
+                          <li key={f.id}>
+                            <button className="fu-item" onClick={() => setOpenId(f.lead_id)}>
+                              <span className="fu-name">{lead?.business_name || 'Lead'}</span>
+                              <span className={overdue ? 'fu-date overdue' : 'fu-date'}>
+                                {overdue ? `Overdue since ${fmtDate(f.due_date)}` : 'Due today'}
+                              </span>
+                            </button>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  )}
+                </section>
               )}
-            </section>
+            </div>
+
+            <div className="main-col">
+              {show(3) && (
+                <Approvals
+                  drafts={drafts}
+                  approved={approved}
+                  leadById={leadById}
+                  isAdmin={isAdmin}
+                  onOpen={setOpenId}
+                  focus={focusOn('sec-approvals')}
+                />
+              )}
+
+              <section id="sec-leads" className={focusOn('sec-leads') ? 'panel leads focus' : 'panel leads'} aria-label="Leads">
+                <div className="leads-head">
+                  <h2>Leads <span className="count">{visibleLeads.length}</span></h2>
+                  <div className="leads-tools">
+                    <input type="search" placeholder="Search name, area, category" value={query}
+                      onChange={(e) => setQuery(e.target.value)} aria-label="Search leads" />
+                    <select value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter by status">
+                      <option value="all">All statuses ({leads.length})</option>
+                      {STATUS_ORDER.filter((s) => statusCounts[s]).map((s) => (
+                        <option key={s} value={s}>{STATUS[s]} ({statusCounts[s]})</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {visibleLeads.length === 0 ? (
+                  <p className="empty">
+                    {leads.length === 0
+                      ? 'No leads yet. Your first researched businesses will appear here.'
+                      : 'No leads match this search. Clear the search or pick another status.'}
+                  </p>
+                ) : (
+                  <div className="table-wrap">
+                    <table className="table">
+                      <thead>
+                        <tr>
+                          <th scope="col">Business</th>
+                          <th scope="col">Why it fits</th>
+                          <th scope="col">Status</th>
+                          <th scope="col" className="num">Score</th>
+                          <th scope="col">Last contact</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {visibleLeads.map((l) => (
+                          <tr key={l.id} onClick={() => setOpenId(l.id)} tabIndex={0}
+                            onKeyDown={(e) => { if (e.key === 'Enter') setOpenId(l.id) }}>
+                            <td>
+                              <span className="biz">{l.business_name}</span>
+                              <span className="sub">{l.area}{l.category ? `, ${l.category.replace(/_/g, ' ')}` : ''}</span>
+                            </td>
+                            <td>{l.problem_found || <span className="sub">General fit</span>}</td>
+                            <td><span className={`pill pill-${l.status}`}>{STATUS[l.status] || l.status}</span></td>
+                            <td className="num">{l.score ?? ''}</td>
+                            <td>{fmtDate(lastContact(l.id)) || <span className="sub">Not yet</span>}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+            </div>
           </div>
-        </div>
+        )}
       </main>
 
       {openLead && (
@@ -320,6 +439,61 @@ export default function Dashboard({
         />
       )}
     </div>
+  )
+}
+
+function DemoGuide({ step, busy, onNext, error, draftsLeft }) {
+  const s = DEMO[step]
+  const current = Math.min(step, 6)
+  return (
+    <section className="guide" aria-label="Demo guide">
+      <ol className="guide-steps">
+        {DEMO_STEPS.map((n) => (
+          <li key={n} className={n < step ? 'done' : n === current && step < 7 ? 'current' : ''}>
+            <span className="guide-num">{n}</span>
+            <span className="guide-label">{DEMO[n].label}</span>
+          </li>
+        ))}
+      </ol>
+      <div className="guide-body">
+        <div>
+          <p className="guide-kicker">{step < 7 ? `Step ${step} of 6` : 'Demo complete'}</p>
+          <h2>{s.title}</h2>
+          <p className="guide-text">{s.text}</p>
+          {step === 3 && (
+            <p className="guide-hint">
+              {draftsLeft} email{draftsLeft === 1 ? '' : 's'} left to review below.
+            </p>
+          )}
+          {error && <p className="error">{error}</p>}
+        </div>
+        {s.button && (
+          <button className={step === 7 ? 'btn btn-plain' : 'btn btn-brass btn-lg'} onClick={onNext} disabled={busy}>
+            {busy ? 'Working...' : s.button}
+          </button>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function DemoProfile({ name }) {
+  return (
+    <section className="panel profile" aria-label="Company profile">
+      <h2>{name}</h2>
+      <dl className="facts">
+        <dt>Services</dt>
+        <dd>AC maintenance, cleaning, pest control, kitchen exhaust cleaning</dd>
+        <dt>Ideal customers</dt>
+        <dd>Clinics, offices, business centres, restaurants, gyms, training centres</dd>
+        <dt>Areas</dt>
+        <dd>Al Khuwair, Ghubrah, Qurum, Bousher, Ghala, Ruwi</dd>
+        <dt>Sends from</dt>
+        <dd>sales@gulffacility.example</dd>
+        <dt>Per week</dt>
+        <dd>Up to 30 new businesses, emails only after your approval</dd>
+      </dl>
+    </section>
   )
 }
 
@@ -346,7 +520,7 @@ function Gears({ spinning }) {
   )
 }
 
-function AgentBar({ client, isAdmin, running, step, stepIndex, latestRun, onRunDemo, flash }) {
+function AgentBar({ client, isAdmin, running, step, progress, latestRun, focus }) {
   const [text, setText] = useState('')
   const [pending, startTransition] = useTransition()
   const [error, setError] = useState('')
@@ -369,7 +543,7 @@ function AgentBar({ client, isAdmin, running, step, stepIndex, latestRun, onRunD
   }
 
   return (
-    <section className={running ? 'agent agent-on' : 'agent'} aria-live="polite">
+    <section id="sec-agent" className={`agent${running ? ' agent-on' : ''}${focus ? ' focus' : ''}`} aria-live="polite">
       <Gears spinning={running} />
       <div className="agent-text">
         <p className="agent-state">
@@ -379,22 +553,19 @@ function AgentBar({ client, isAdmin, running, step, stepIndex, latestRun, onRunD
         <p className="agent-step">
           {running
             ? step || 'Working on your leads'
-            : flash || (latestRun?.finished_at
-                ? `Last run ${fmtDate(latestRun.finished_at)}: ${latestRun.summary || 'completed'}`
-                : 'No runs yet')}
+            : latestRun?.finished_at
+              ? `Last run ${fmtDate(latestRun.finished_at)}: ${latestRun.summary || 'completed'}`
+              : 'Ready to start'}
         </p>
-        {stepIndex !== null && (
+        {progress !== null && (
           <span className="agent-progress" aria-hidden="true">
-            <span style={{ width: `${((stepIndex + 1) / DEMO_STEPS.length) * 100}%` }} />
+            <span style={{ width: `${progress * 100}%` }} />
           </span>
         )}
       </div>
 
-      <div className="agent-actions">
-        {client.is_demo && !running && (
-          <button className="btn btn-brass" onClick={onRunDemo}>Start agent</button>
-        )}
-        {isAdmin && !client.is_demo && (
+      {isAdmin && !client.is_demo && (
+        <div className="agent-actions">
           <div className="agent-admin">
             <input
               value={text}
@@ -409,33 +580,46 @@ function AgentBar({ client, isAdmin, running, step, stepIndex, latestRun, onRunD
             )}
             {error && <span className="error">{error}</span>}
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </section>
   )
 }
 
-function Approvals({ drafts, approved, leadById, isAdmin, onOpen }) {
-  if (drafts.length === 0 && approved.length === 0) {
-    return (
-      <section className="panel approvals" aria-label="Emails waiting for approval">
-        <h2>Waiting for your approval</h2>
-        <p className="empty">No emails to review. When the agent drafts new emails, they appear here before anything is sent.</p>
-      </section>
-    )
+function Approvals({ drafts, approved, leadById, isAdmin, onOpen, focus }) {
+  const [pending, startTransition] = useTransition()
+
+  function approveAll() {
+    startTransition(async () => {
+      for (const o of drafts) {
+        await reviewOutreach({ id: o.id, action: 'approve' })
+      }
+    })
   }
+
   return (
-    <section className="panel approvals" aria-label="Emails waiting for approval">
-      <h2>Waiting for your approval <span className="count">{drafts.length}</span></h2>
+    <section id="sec-approvals" className={focus ? 'panel approvals focus' : 'panel approvals'} aria-label="Emails waiting for approval">
+      <div className="panel-head">
+        <h2>Waiting for your approval <span className="count">{drafts.length}</span></h2>
+        {drafts.length > 1 && (
+          <button className="btn btn-quiet" onClick={approveAll} disabled={pending}>
+            {pending ? 'Approving...' : 'Approve all'}
+          </button>
+        )}
+      </div>
       <p className="muted small">Nothing is sent until you approve it.</p>
-      <ul className="drafts">
-        {drafts.map((o) => (
-          <DraftCard key={o.id} o={o} lead={leadById[o.lead_id]} onOpen={onOpen} />
-        ))}
-      </ul>
+      {drafts.length === 0 && approved.length === 0 ? (
+        <p className="empty">No emails to review. When the agent writes new emails, they appear here before anything is sent.</p>
+      ) : (
+        <ul className="drafts">
+          {drafts.map((o) => (
+            <DraftCard key={o.id} o={o} lead={leadById[o.lead_id]} onOpen={onOpen} />
+          ))}
+        </ul>
+      )}
       {approved.length > 0 && (
         <>
-          <h3 className="approved-head">Approved, being sent <span className="count">{approved.length}</span></h3>
+          <h3 className="approved-head">Approved, ready to send <span className="count">{approved.length}</span></h3>
           <ul className="approved-list">
             {approved.map((o) => (
               <ApprovedRow key={o.id} o={o} lead={leadById[o.lead_id]} isAdmin={isAdmin} />

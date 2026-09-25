@@ -312,3 +312,34 @@ textarea { width: 100%; resize: vertical; }
   .gears.spinning .gear-big, .gears.spinning .gear-small { animation-duration: 30s; }
   .agent-on .agent-dot { animation: none; }
 }
+
+/* Guided demo */
+.btn-lg { padding: 0.75rem 1.4rem; font-size: 1rem; }
+.panel-head { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.panel-head h2 { margin: 0; }
+.guide { background: var(--surface); border: 1.5px solid var(--brass); border-radius: var(--radius-lg); padding: 1.25rem 1.5rem; display: flex; flex-direction: column; gap: 1.1rem; }
+.guide-steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(6, 1fr); gap: 0.4rem; }
+.guide-steps li { display: flex; align-items: center; gap: 0.45rem; color: var(--slate); font-size: 0.85rem; padding-top: 0.55rem; border-top: 3px solid var(--line); }
+.guide-steps li.done { border-top-color: var(--sea); color: var(--sea); }
+.guide-steps li.current { border-top-color: var(--brass); color: var(--ink); font-weight: 600; }
+.guide-num { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--paper); font-size: 0.78rem; font-weight: 600; flex: none; }
+.guide-steps li.done .guide-num { background: var(--sea); color: #fff; }
+.guide-steps li.current .guide-num { background: var(--brass); color: #fff; }
+.guide-body { display: flex; justify-content: space-between; align-items: center; gap: 1.25rem; flex-wrap: wrap; }
+.guide-body > div { flex: 1 1 380px; max-width: 70ch; }
+.guide-kicker { color: var(--brass); font-weight: 600; font-size: 0.85rem; margin-bottom: 0.2rem; }
+.guide-body h2 { font-size: 1.35rem; margin-bottom: 0.35rem; }
+.guide-text { color: #33464b; }
+.guide-hint { margin-top: 0.5rem; font-weight: 500; color: var(--sea); }
+.focus { box-shadow: 0 0 0 3px var(--brass); }
+.profile .facts { grid-template-columns: 140px 1fr; }
+.profile h2 { margin-bottom: 1rem; }
+
+@media (max-width: 640px) {
+  .guide { padding: 1rem; }
+  .guide-steps { grid-template-columns: repeat(6, 1fr); }
+  .guide-label { display: none; }
+  .guide-steps li { justify-content: center; }
+  .guide-body .btn { width: 100%; }
+  .profile .facts { grid-template-columns: 1fr; }
+}
