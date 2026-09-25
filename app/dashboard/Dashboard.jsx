@@ -14,6 +14,7 @@ import {
   demoAction,
   demoSend,
   clientMarkSent,
+  demoSetArea,
 } from '../actions'
 
 const STATUS = {
@@ -37,7 +38,7 @@ const DEMO = {
   1: {
     label: 'Profile',
     title: 'Your company profile',
-    text: 'We start by learning what you sell and who you want as customers. The agent uses this to search for the right businesses.',
+    text: 'We start by learning what you sell and who you want as customers. When you press Start agent, allow location so it searches near you first.',
     button: 'Start agent',
     action: 'find',
     anim: [
@@ -129,6 +130,33 @@ function pct(part, whole) {
   return Math.round((part / whole) * 100)
 }
 
+// Ask the browser for the viewer's location and turn it into an area name.
+// Used on screen only; nothing about the location is saved.
+async function detectArea() {
+  if (typeof navigator === 'undefined' || !navigator.geolocation) return null
+  const pos = await new Promise((resolve) => {
+    navigator.geolocation.getCurrentPosition(
+      (p) => resolve(p),
+      () => resolve(null),
+      { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 }
+    )
+  })
+  if (!pos) return null
+  try {
+    const { latitude, longitude } = pos.coords
+    const res = await fetch(
+      `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${latitude}&longitude=${longitude}&localityLanguage=en`
+    )
+    const d = await res.json()
+    const area = d.locality || d.city || ''
+    const city = d.city && d.city !== area ? d.city : d.principalSubdivision || ''
+    const name = [area, city].filter(Boolean).join(', ')
+    return name ? { area: area || city, label: name } : null
+  } catch {
+    return null
+  }
+}
+
 function getDemoStep(leads, outreach) {
   if (leads.length === 0) return 1
   const has = (s) => outreach.some((o) => o.status === s)
@@ -150,6 +178,7 @@ export default function Dashboard({
   const [anim, setAnim] = useState(null) // { steps: [], i: 0 }
   const [demoError, setDemoError] = useState('')
   const [emailFor, setEmailFor] = useState(null) // lead id, or 'all'
+  const [place, setPlace] = useState(null) // { area, label } from the viewer's location, demo only
 
   const isDemo = client.is_demo
   const demoStep = isDemo ? getDemoStep(leads, outreach) : null
@@ -185,12 +214,33 @@ export default function Dashboard({
     const step = DEMO[demoStep]
     if (!step?.action) return
     setDemoError('')
-    const steps = step.anim || []
+
+    let steps = step.anim || []
+    let here = place
+    if (step.action === 'find') {
+      setAnim({ steps: ['Checking your location (allow it so the agent searches near you)'], i: 0 })
+      here = await detectArea()
+      if (here) setPlace(here)
+      const area = here?.area || 'Muscat'
+      steps = [
+        'Reading your company profile',
+        here ? `Your location: ${here.label}` : 'Location not shared, searching across Muscat',
+        `Searching business listings near ${area}`,
+        'Searching nearby areas across Muscat',
+        'Found 38 businesses, reading their customer reviews',
+        '6 businesses matched, saving them to your leads',
+      ]
+    }
+
     for (let i = 0; i < steps.length; i++) {
       setAnim({ steps, i })
       await new Promise((r) => setTimeout(r, step.action === 'find' ? 2000 : 1600))
     }
     const res = await demoAction(step.action)
+    if (!res?.error && step.action === 'find' && here?.area) {
+      await demoSetArea(here.area)
+    }
+    if (!res?.error && step.action === 'reset') setPlace(null)
     setAnim(null)
     if (res?.error) setDemoError(res.error)
     router.refresh()
@@ -291,19 +341,25 @@ export default function Dashboard({
           step={anim ? anim.steps[anim.i] : latestRun?.current_step}
           progress={anim ? (anim.i + 1) / anim.steps.length : null}
           latestRun={latestRun}
+          place={isDemo ? place : null}
           focus={focusOn('sec-agent')}
         />
 
-        {isDemo && demoStep === 1 && <DemoProfile name={client.name} />}
+        {isDemo && demoStep === 1 && <DemoProfile name={client.name} place={place} />}
 
         {show(2) && (
           <section id="sec-pipeline" className={focusOn('sec-pipeline') ? 'pipeline focus' : 'pipeline'} aria-label="Lead pipeline">
             <div className="pipeline-head">
               <h1>{client.name}</h1>
-              <p className="muted">
-                {messagesSent} messages sent
-                {dueFollowups.length > 0 && <> and {dueFollowups.length} follow-up{dueFollowups.length === 1 ? '' : 's'} due</>}
-              </p>
+              <div className="pipeline-meta">
+                <p className="muted">
+                  {messagesSent} messages sent
+                  {dueFollowups.length > 0 && <> and {dueFollowups.length} follow-up{dueFollowups.length === 1 ? '' : 's'} due</>}
+                </p>
+                <ReportButton
+                  data={{ client, leads, outreach, followups, events, sentTotal, month: monthNumber(firstSentAt), today }}
+                />
+              </div>
             </div>
             <ol className="stages">
               {stages.map((s, i) => {
@@ -570,6 +626,33 @@ function SentCounter({ total, firstSentAt }) {
   )
 }
 
+function ReportButton({ data }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  async function run() {
+    setBusy(true)
+    setError('')
+    try {
+      const { downloadReport } = await import('@/lib/report')
+      await downloadReport(data)
+    } catch {
+      setError('Could not create the PDF. Try again.')
+    }
+    setBusy(false)
+  }
+  return (
+    <span className="report-btn-wrap">
+      <button className="btn btn-quiet" onClick={run} disabled={busy}>
+        <svg viewBox="0 0 24 24" aria-hidden="true" className="btn-icon">
+          <path d="M12 3v12m0 0l-5-5m5 5l5-5M4 19h16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        {busy ? 'Creating PDF...' : 'Download report (PDF)'}
+      </button>
+      {error && <span className="error">{error}</span>}
+    </span>
+  )
+}
+
 // Top-right status light.
 // Demo: starts red "AI agent offline", switches to green "AI agent activated" after 3 seconds.
 // Both demo and real: turns red when the device loses internet (cable out, data off, Wi-Fi without internet)
@@ -663,7 +746,7 @@ function DemoGuide({ step, busy, onNext, error, draftsLeft }) {
   )
 }
 
-function DemoProfile({ name }) {
+function DemoProfile({ name, place }) {
   return (
     <section className="panel profile" aria-label="Company profile">
       <h2>{name}</h2>
@@ -673,7 +756,7 @@ function DemoProfile({ name }) {
         <dt>Ideal customers</dt>
         <dd>Clinics, offices, business centres, restaurants, gyms, training centres</dd>
         <dt>Areas</dt>
-        <dd>Al Khuwair, Ghubrah, Qurum, Bousher, Ghala, Ruwi</dd>
+        <dd>{place ? `Near you (${place.label}), then ` : 'Near your location, then '}Al Khuwair, Ghubrah, Qurum, Bousher, Ghala, Ruwi</dd>
         <dt>Sends from</dt>
         <dd>sales@gulffacility.example</dd>
         <dt>Per week</dt>
@@ -706,7 +789,7 @@ function Gears({ spinning }) {
   )
 }
 
-function AgentBar({ client, isAdmin, running, step, progress, latestRun, focus }) {
+function AgentBar({ client, isAdmin, running, step, progress, latestRun, place, focus }) {
   const [text, setText] = useState('')
   const [pending, startTransition] = useTransition()
   const [error, setError] = useState('')
@@ -743,6 +826,15 @@ function AgentBar({ client, isAdmin, running, step, progress, latestRun, focus }
               ? `Last run ${fmtDate(latestRun.finished_at)}: ${latestRun.summary || 'completed'}`
               : 'Ready to start'}
         </p>
+        {place && (
+          <p className="agent-place">
+            <svg viewBox="0 0 24 24" aria-hidden="true" className="pin">
+              <path d="M12 22s7-6.5 7-12a7 7 0 1 0-14 0c0 5.5 7 12 7 12z" fill="currentColor" />
+              <circle cx="12" cy="10" r="2.6" fill="var(--sea-deep)" />
+            </svg>
+            {place.label}
+          </p>
+        )}
         {progress !== null && (
           <span className="agent-progress" aria-hidden="true">
             <span style={{ width: `${progress * 100}%` }} />

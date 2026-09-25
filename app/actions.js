@@ -131,6 +131,15 @@ export async function demoAction(action) {
   return { ok: true }
 }
 
+// Demo company only: put the top demo leads in the viewer's current area (area name only, never coordinates)
+export async function demoSetArea(area) {
+  const supabase = createClient()
+  const { data, error } = await supabase.rpc('demo_set_area', { p_area: String(area || '').slice(0, 60) })
+  if (error || data !== 'ok') return { error: 'Could not set the demo area.' }
+  revalidatePath('/dashboard')
+  return { ok: true }
+}
+
 // Demo company only: approve and "send" drafted emails
 export async function demoSend(ids) {
   const supabase = createClient()
