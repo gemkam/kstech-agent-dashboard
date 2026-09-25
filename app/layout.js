@@ -18,7 +18,11 @@ export const viewport = {
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en" className={`${sans.variable} ${serif.variable}`}>
+    <html lang="en" className={`${sans.variable} ${serif.variable}`} suppressHydrationWarning>
+      <head>
+        {/* apply the saved light/dark choice before the page paints */}
+        <script dangerouslySetInnerHTML={{ __html: "try{var t=localStorage.getItem('ks-theme');if(t)document.documentElement.setAttribute('data-theme',t)}catch(e){}" }} />
+      </head>
       <body>{children}</body>
     </html>
   )

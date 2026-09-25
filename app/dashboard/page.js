@@ -25,7 +25,7 @@ export default async function DashboardPage({ searchParams }) {
   let client = null
 
   if (isAdmin) {
-    const { data } = await supabase.from('clients').select('id, name, slug, is_demo, description, search_radius_km').order('name')
+    const { data } = await supabase.from('clients').select('id, name, slug, is_demo, demo_kind, description, search_radius_km').order('name')
     clients = data || []
     client =
       clients.find((c) => c.slug === searchParams?.client) ||
@@ -34,7 +34,7 @@ export default async function DashboardPage({ searchParams }) {
   } else if (profile.client_id) {
     const { data } = await supabase
       .from('clients')
-      .select('id, name, slug, is_demo, description, search_radius_km')
+      .select('id, name, slug, is_demo, demo_kind, description, search_radius_km')
       .eq('id', profile.client_id)
       .single()
     client = data
@@ -89,6 +89,13 @@ export default async function DashboardPage({ searchParams }) {
       .limit(1),
   ])
 
+  // Demo login: list the demo companies so the presenter can switch between them
+  let demoClients = []
+  if (!isAdmin && client.is_demo) {
+    const { data } = await supabase.from('clients').select('id, name, slug, demo_kind').eq('is_demo', true).order('name')
+    demoClients = data || []
+  }
+
   const visitCounts = {}
   for (const v of visitsRes.data || []) {
     visitCounts[v.ref] = (visitCounts[v.ref] || 0) + 1
@@ -96,7 +103,9 @@ export default async function DashboardPage({ searchParams }) {
 
   return (
     <Dashboard
+      key={client.id}
       isAdmin={isAdmin}
+      demoClients={demoClients}
       userEmail={profile.email || user.email}
       clients={clients}
       client={client}

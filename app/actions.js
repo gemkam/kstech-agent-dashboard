@@ -121,20 +121,20 @@ export async function finishAgentRun({ runId, clientId, summary }) {
 }
 
 // Demo company only: guided demo steps (reset, find, draft, send, replies, results)
-export async function demoAction(action) {
+export async function demoAction(action, clientId) {
   const allowed = ['reset', 'find', 'draft', 'send', 'replies', 'results']
   if (!allowed.includes(action)) return { error: 'Unknown demo step.' }
   const supabase = createClient()
-  const { data, error } = await supabase.rpc('demo_action', { p_action: action })
-  if (error || data !== 'ok') return { error: 'Demo steps only work on the demo company.' }
+  const { data, error } = await supabase.rpc('demo_action', { p_action: action, p_client: clientId })
+  if (error || data !== 'ok') return { error: 'Demo steps only work on a demo company.' }
   revalidatePath('/dashboard')
   return { ok: true }
 }
 
 // Demo company only: put the top demo leads in the viewer's current area (area name only, never coordinates)
-export async function demoSetArea(area) {
+export async function demoSetArea(area, clientId) {
   const supabase = createClient()
-  const { data, error } = await supabase.rpc('demo_set_area', { p_area: String(area || '').slice(0, 60) })
+  const { data, error } = await supabase.rpc('demo_set_area', { p_area: String(area || '').slice(0, 60), p_client: clientId })
   if (error || data !== 'ok') return { error: 'Could not set the demo area.' }
   revalidatePath('/dashboard')
   return { ok: true }
@@ -150,9 +150,9 @@ export async function setSearchRadius({ clientId, km }) {
 }
 
 // Demo company only: expanding the radius finds more businesses further out
-export async function demoExpand(km) {
+export async function demoExpand(km, clientId) {
   const supabase = createClient()
-  const { data, error } = await supabase.rpc('demo_expand', { p_km: km })
+  const { data, error } = await supabase.rpc('demo_expand', { p_km: km, p_client: clientId })
   if (error || data !== 'ok') return { error: 'Could not expand the demo search.' }
   revalidatePath('/dashboard')
   return { ok: true }
@@ -162,9 +162,18 @@ export async function demoExpand(km) {
 export async function demoSend(ids) {
   const supabase = createClient()
   const { data, error } = await supabase.rpc('demo_send', { p_ids: ids })
-  if (error || data < 0) return { error: 'Sending is only simulated for the demo company.' }
+  if (error || data < 0) return { error: 'Sending is only simulated for demo companies.' }
   revalidatePath('/dashboard')
   return { ok: true, sent: data }
+}
+
+// Demo login only: switch between the demo companies
+export async function switchDemo(slug) {
+  const supabase = createClient()
+  const { data, error } = await supabase.rpc('switch_demo', { p_slug: slug })
+  if (error || data !== 'ok') return { error: 'Could not switch demo.' }
+  revalidatePath('/dashboard')
+  return { ok: true }
 }
 
 export async function updateProfile(formData) {

@@ -17,6 +17,7 @@ import {
   demoSetArea,
   setSearchRadius,
   demoExpand,
+  switchDemo,
 } from '../actions'
 
 const STATUS = {
@@ -110,6 +111,56 @@ const DEMO = {
   },
 }
 const DEMO_STEPS = [1, 2, 3, 4, 5, 6]
+
+// The other two demos reuse the same 6 steps with their own words
+const DEMO_OVERRIDES = {
+  quotes: {
+    1: { title: 'Your quotes and enquiries', text: 'The agent reads your enquiry inbox and quote list, and finds every customer who asked for a price and went quiet.', button: 'Start agent',
+         anim: ['Reading your enquiry inbox', 'Checking the last 30 days of quote requests', 'Found 14 quote requests', 'Checking which ones had no reply or no follow-up', '6 quotes need a follow-up, saving them'] },
+    2: { label: 'Scan quotes', title: '6 quotes need a follow-up', text: 'Each one shows the quote, how long it has been silent, and why it is worth chasing. Open any of them for details.', button: 'Write follow-ups',
+         anim: ['Reading each quote and customer', 'Writing a polite follow-up for each one', 'Checking tone and length', 'Saving follow-ups for your approval'] },
+    3: { title: 'You approve every follow-up', text: 'Read each follow-up, then approve, edit or reject it. Nothing is sent without your approval.' },
+    4: { title: 'Approved follow-ups are sent', text: 'Follow-ups go out from your own company email, so customers reply straight to you.', button: 'Send approved follow-ups',
+         anim: ['Sending approved follow-ups from your company email', 'Scheduling a reminder for each customer'] },
+    5: { title: 'Waiting for customers to reply', text: 'The agent tracks who replies. Customers who stay quiet get one more polite reminder after two days.' },
+    6: { title: '2 customers replied', text: 'Replies arrive in your inbox and show here. You confirm the order or book the site visit.' },
+    7: { title: 'One week in: an order confirmed and a site visit booked', text: 'No quote is forgotten any more. Every price you send gets followed up until the customer decides.' },
+  },
+  booking: {
+    1: { title: 'Your enquiries', text: 'The agent reads WhatsApp, Instagram, website forms and missed calls, and finds everyone who asked about an appointment but did not book.', button: 'Start agent',
+         anim: ['Reading WhatsApp and Instagram messages', 'Checking website forms and missed calls', 'Found 21 enquiries from the last 2 weeks', 'Checking who has not booked yet', '6 people did not book, saving them'] },
+    2: { label: 'Scan enquiries', title: '6 people did not book', text: 'Each one shows what they asked about and why they are likely to book if you offer a time. Open any of them for details.', button: 'Write invitations',
+         anim: ['Reading each enquiry', 'Offering two free times to each person', 'Checking tone and length', 'Saving invitations for your approval'] },
+    3: { title: 'You approve every message', text: 'Read each booking invitation, then approve, edit or reject it. Nothing is sent without your approval.' },
+    4: { title: 'Approved invitations are sent', text: 'Messages go out from your clinic WhatsApp, so people reply straight to you.', button: 'Send approved invitations',
+         anim: ['Sending approved invitations from your clinic WhatsApp', 'Scheduling a reminder for each person'] },
+    5: { title: 'Waiting for replies', text: 'The agent tracks who replies. People who stay quiet get one friendly reminder after two days.' },
+    6: { title: '2 people replied', text: 'They picked a time. Your front desk confirms the appointment.' },
+    7: { title: 'One week in: an appointment booked and a patient attended', text: 'Every enquiry gets an answer and a time. Fewer lost patients, fuller calendar.' },
+  },
+}
+
+function getDemo(kind) {
+  const extra = DEMO_OVERRIDES[kind]
+  if (!extra) return DEMO
+  const out = {}
+  for (const k of Object.keys(DEMO)) out[k] = { ...DEMO[k], ...(extra[k] || {}) }
+  return out
+}
+
+const STAGE_LABELS = {
+  leadgen: ['Businesses found', 'Contacted', 'Replied', 'Meetings', 'Won'],
+  quotes: ['Open quotes', 'Followed up', 'Replied', 'Site visits', 'Orders won'],
+  booking: ['Enquiries', 'Invited', 'Replied', 'Booked', 'Attended'],
+}
+
+const DEMO_FROM = {
+  leadgen: 'sales@gulffacility.example',
+  quotes: 'sales@crescentsigns.example',
+  booking: 'Clinic WhatsApp +968 9000 0200',
+}
+
+const DEMO_TYPE_LABEL = { leadgen: 'Lead generation', quotes: 'Quote follow-up', booking: 'Booking' }
 const RADIUS_OPTIONS = [0, 10, 20, 40, 60, 80, 100]
 const RADIUS_TOWNS = {
   10: 'Ghala and Azaiba', 20: 'Seeb and Al Mawaleh', 40: 'Al Khoud and Al Amerat',
@@ -176,7 +227,7 @@ function getDemoStep(leads, outreach) {
 }
 
 export default function Dashboard({
-  isAdmin, userEmail, clients, client, leads, outreach, followups, visitCounts, today, latestRun, events, sentTotal, firstSentAt,
+  isAdmin, userEmail, clients, demoClients = [], client, leads, outreach, followups, visitCounts, today, latestRun, events, sentTotal, firstSentAt,
 }) {
   const router = useRouter()
   const [query, setQuery] = useState('')
@@ -190,6 +241,9 @@ export default function Dashboard({
   const [radiusNote, setRadiusNote] = useState('')
 
   const isDemo = client.is_demo
+  const kind = client.demo_kind || 'leadgen'
+  const DEMO = getDemo(isDemo ? kind : 'leadgen')
+  const stageLabels = STAGE_LABELS[isDemo ? kind : 'leadgen']
   const demoStep = isDemo ? getDemoStep(leads, outreach) : null
   const show = (minStep) => !isDemo || demoStep >= minStep
 
@@ -226,7 +280,7 @@ export default function Dashboard({
 
     let steps = step.anim || []
     let here = place
-    if (step.action === 'find') {
+    if (step.action === 'find' && kind === 'leadgen') {
       setAnim({ steps: ['Checking your location (allow it so the agent searches near you)'], i: 0 })
       here = await detectArea()
       if (here) setPlace(here)
@@ -245,9 +299,9 @@ export default function Dashboard({
       setAnim({ steps, i })
       await new Promise((r) => setTimeout(r, step.action === 'find' ? 2000 : 1600))
     }
-    const res = await demoAction(step.action)
-    if (!res?.error && step.action === 'find' && here?.area) {
-      await demoSetArea(here.area)
+    const res = await demoAction(step.action, client.id)
+    if (!res?.error && step.action === 'find' && kind === 'leadgen' && here?.area) {
+      await demoSetArea(here.area, client.id)
     }
     if (!res?.error && step.action === 'reset') setPlace(null)
     setAnim(null)
@@ -281,7 +335,7 @@ export default function Dashboard({
       setAnim({ steps, i })
       await new Promise((r) => setTimeout(r, 1700))
     }
-    const res = await demoExpand(km)
+    const res = await demoExpand(km, client.id)
     setAnim(null)
     if (res?.error) setRadiusNote(res.error)
     router.refresh()
@@ -303,11 +357,11 @@ export default function Dashboard({
 
   const active = leads.filter((l) => l.status !== 'skipped')
   const stages = [
-    { key: 'found', label: 'Businesses found', count: active.length },
-    { key: 'contacted', label: 'Contacted', count: leads.filter((l) => CONTACTED.includes(l.status)).length },
-    { key: 'replied', label: 'Replied', count: leads.filter((l) => REPLIED.includes(l.status)).length },
-    { key: 'meeting', label: 'Meetings', count: leads.filter((l) => MEETING.includes(l.status)).length },
-    { key: 'won', label: 'Won', count: leads.filter((l) => l.status === 'won').length },
+    { key: 'found', label: stageLabels[0], count: active.length },
+    { key: 'contacted', label: stageLabels[1], count: leads.filter((l) => CONTACTED.includes(l.status)).length },
+    { key: 'replied', label: stageLabels[2], count: leads.filter((l) => REPLIED.includes(l.status)).length },
+    { key: 'meeting', label: stageLabels[3], count: leads.filter((l) => MEETING.includes(l.status)).length },
+    { key: 'won', label: stageLabels[4], count: leads.filter((l) => l.status === 'won').length },
   ]
   const messagesSent = outreach.filter((o) => ['sent', 'replied', 'no_reply'].includes(o.status)).length
   const dueFollowups = followups.filter((f) => !f.done && f.due_date && f.due_date <= today)
@@ -352,9 +406,12 @@ export default function Dashboard({
                 ))}
               </select>
             </label>
+          ) : demoClients.length > 1 ? (
+            <DemoSwitch clients={demoClients} current={client.slug} />
           ) : (
             <span className="client-name">{client.name}</span>
           )}
+          <ThemeToggle />
           {isAdmin && <Link href="/admin" className="btn btn-ghost">Users</Link>}
           <form action={signOut}>
             <button className="btn btn-ghost" type="submit" title={userEmail}>Sign out</button>
@@ -367,6 +424,8 @@ export default function Dashboard({
       <main className="content">
         {isDemo && (
           <DemoGuide
+            config={DEMO}
+            typeLabel={DEMO_TYPE_LABEL[kind]}
             step={demoStep}
             busy={Boolean(anim)}
             onNext={runDemoStep}
@@ -386,10 +445,37 @@ export default function Dashboard({
           radius={radius}
           radiusNote={radiusNote}
           onRadius={changeRadius}
+          showRadius={!isDemo || kind === 'leadgen'}
+          calm={!isDemo}
           focus={focusOn('sec-agent')}
         />
 
-        {isDemo && demoStep === 1 && <DemoProfile name={client.name} description={client.description} place={place} radius={radius} />}
+        {isDemo && demoStep === 1 && <DemoProfile kind={kind} name={client.name} description={client.description} place={place} radius={radius} />}
+
+        {show(2) && (
+          <SummaryBar
+            outreach={outreach}
+            leads={leads}
+            dueCount={dueFollowups.length}
+            draftCount={drafts.length}
+            approvedCount={approved.length}
+            today={today}
+            labels={stageLabels}
+          />
+        )}
+
+        {show(3) && (drafts.length > 0 || approved.length > 0 || isDemo) && (
+          <Approvals
+            drafts={drafts}
+            approved={approved}
+            leadById={leadById}
+            isAdmin={isAdmin}
+            onOpen={setOpenId}
+            onApproveAll={() => setEmailFor('all')}
+            isDemo={isDemo}
+            focus={focusOn('sec-approvals')}
+          />
+        )}
 
         {show(2) && (
           <section id="sec-pipeline" className={focusOn('sec-pipeline') ? 'pipeline focus' : 'pipeline'} aria-label="Lead pipeline">
@@ -413,7 +499,7 @@ export default function Dashboard({
                 const prev = i === 0 ? null : stages[i - 1].count
                 return (
                   <li key={s.key} className="stage">
-                    <span className="stage-count"><AnimatedNumber value={s.count} /></span>
+                    <span className="stage-count">{isDemo ? <AnimatedNumber value={s.count} /> : s.count}</span>
                     <span className="stage-label">{s.label}</span>
                     <span className="stage-track" aria-hidden="true">
                       <span className="stage-fill" style={{ width: `${Math.max(pct(s.count, stages[0].count), s.count ? 4 : 0)}%` }} />
@@ -474,19 +560,6 @@ export default function Dashboard({
             </div>
 
             <div className="main-col">
-              {show(3) && (
-                <Approvals
-                  drafts={drafts}
-                  approved={approved}
-                  leadById={leadById}
-                  isAdmin={isAdmin}
-                  onOpen={setOpenId}
-                  onApproveAll={() => setEmailFor('all')}
-                  isDemo={isDemo}
-                  focus={focusOn('sec-approvals')}
-                />
-              )}
-
               <section id="sec-leads" className={focusOn('sec-leads') ? 'panel leads focus' : 'panel leads'} aria-label="Leads">
                 <div className="leads-head">
                   <h2>Leads <span className="count">{visibleLeads.length}</span></h2>
@@ -569,6 +642,8 @@ export default function Dashboard({
           leadById={leadById}
           isDemo={isDemo}
           demoStep={demoStep}
+          clientId={client.id}
+          kind={kind}
           onClose={() => setEmailFor(null)}
           onRefresh={() => router.refresh()}
         />
@@ -594,6 +669,81 @@ function LiveBadge() {
       <span className="live-dot" aria-hidden="true" />
       {online ? 'Live' : 'Offline'}
     </span>
+  )
+}
+
+// One-line answer to "is this working?", shown first
+function SummaryBar({ outreach, leads, dueCount, draftCount, approvedCount, today, labels }) {
+  const monthStart = new Date(today.slice(0, 7) + '-01')
+  const inMonth = (d) => d && new Date(d) >= monthStart
+  const sent = outreach.filter((o) => inMonth(o.sent_at)).length
+  const replies = outreach.filter((o) => inMonth(o.replied_at)).length
+  const meetings = leads.filter((l) => MEETING.includes(l.status) && inMonth(l.updated_at)).length
+  const monthName = new Date(today).toLocaleDateString('en-GB', { month: 'long' })
+  const actions = []
+  if (draftCount) actions.push(`${draftCount} waiting for your approval`)
+  if (approvedCount) actions.push(`${approvedCount} approved, not sent yet`)
+  if (dueCount) actions.push(`${dueCount} follow-up${dueCount === 1 ? '' : 's'} due`)
+
+  return (
+    <section className="summary" aria-label="This month">
+      <p className="summary-line">
+        <span className="summary-month">{monthName}:</span>{' '}
+        <strong>{sent}</strong> {sent === 1 ? 'message' : 'messages'} sent, <strong>{replies}</strong> {replies === 1 ? 'reply' : 'replies'},{' '}
+        <strong>{meetings}</strong> {labels[3].toLowerCase()}
+      </p>
+      {actions.length > 0 ? (
+        <p className="summary-action">
+          <span className="summary-dot" aria-hidden="true" />
+          Needs your action: {actions.join(', ')}
+        </p>
+      ) : (
+        <p className="summary-ok">Nothing needs your action right now.</p>
+      )}
+    </section>
+  )
+}
+
+// Light / dark switch, remembered on this device
+function ThemeToggle() {
+  const [theme, setTheme] = useState('dark')
+  useEffect(() => {
+    try { setTheme(localStorage.getItem('ks-theme') || 'dark') } catch {}
+  }, [])
+  function toggle() {
+    const next = theme === 'dark' ? 'light' : 'dark'
+    setTheme(next)
+    document.documentElement.setAttribute('data-theme', next)
+    try { localStorage.setItem('ks-theme', next) } catch {}
+  }
+  return (
+    <button type="button" className="btn btn-ghost theme-btn" onClick={toggle} aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}>
+      {theme === 'dark' ? (
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5" fill="none" stroke="currentColor" strokeWidth="2" /><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
+      ) : (
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" /></svg>
+      )}
+    </button>
+  )
+}
+
+// Demo login: switch between the three demo companies
+function DemoSwitch({ clients, current }) {
+  const router = useRouter()
+  const [pending, startTransition] = useTransition()
+  return (
+    <label className="client-switch">
+      <span className="sr-only">Demo type</span>
+      <select value={current} disabled={pending}
+        onChange={(e) => {
+          const slug = e.target.value
+          startTransition(async () => { await switchDemo(slug); router.refresh() })
+        }}>
+        {clients.map((c) => (
+          <option key={c.id} value={c.slug}>{DEMO_TYPE_LABEL[c.demo_kind] || c.name}: {c.name.replace(' (Demo)', '')}</option>
+        ))}
+      </select>
+    </label>
   )
 }
 
@@ -759,7 +909,7 @@ function StatusBadge({ isDemo }) {
   )
 }
 
-function DemoGuide({ step, busy, onNext, error, draftsLeft }) {
+function DemoGuide({ config: DEMO, typeLabel, step, busy, onNext, error, draftsLeft }) {
   const s = DEMO[step]
   const current = Math.min(step, 6)
   return (
@@ -774,12 +924,12 @@ function DemoGuide({ step, busy, onNext, error, draftsLeft }) {
       </ol>
       <div className="guide-body">
         <div>
-          <p className="guide-kicker">{step < 7 ? `Step ${step} of 6` : 'Demo complete'}</p>
+          <p className="guide-kicker">{typeLabel} demo, {step < 7 ? `step ${step} of 6` : 'complete'}</p>
           <h2>{s.title}</h2>
           <p className="guide-text">{s.text}</p>
           {step === 3 && (
             <p className="guide-hint">
-              {draftsLeft} email{draftsLeft === 1 ? '' : 's'} left to review below.
+              {draftsLeft} message{draftsLeft === 1 ? '' : 's'} left to review below.
             </p>
           )}
           {error && <p className="error">{error}</p>}
@@ -794,22 +944,45 @@ function DemoGuide({ step, busy, onNext, error, draftsLeft }) {
   )
 }
 
-function DemoProfile({ name, description, place, radius }) {
+const PROFILE = {
+  leadgen: [
+    ['Services', 'AC maintenance, cleaning, pest control, kitchen exhaust cleaning'],
+    ['Ideal customers', 'Clinics, offices, business centres, restaurants, gyms, training centres'],
+    ['Sends from', 'sales@gulffacility.example'],
+    ['Per week', 'Up to 30 new businesses, emails only after your approval'],
+  ],
+  quotes: [
+    ['Services', 'Shop signs, vehicle branding, menu boards, exhibition printing'],
+    ['What the agent does', 'Tracks every quote request and follows up when a customer goes quiet'],
+    ['Reads from', 'Enquiry email inbox, WhatsApp, your quote list'],
+    ['Sends from', 'sales@crescentsigns.example'],
+    ['Per week', 'Every open quote checked, follow-ups only after your approval'],
+  ],
+  booking: [
+    ['Treatments', 'Check-ups, cleaning, whitening, braces'],
+    ['What the agent does', 'Answers appointment enquiries and offers free times'],
+    ['Reads from', 'WhatsApp, Instagram, website form, missed calls'],
+    ['Sends from', 'Clinic WhatsApp'],
+    ['Per week', 'Every enquiry answered the same day, messages only after your approval'],
+  ],
+}
+
+function DemoProfile({ kind, name, description, place, radius }) {
+  const rows = PROFILE[kind] || PROFILE.leadgen
   return (
     <section className="panel profile" aria-label="Company profile">
       <h2>{name}</h2>
       {description && <p className="client-desc">{description}</p>}
       <dl className="facts">
-        <dt>Services</dt>
-        <dd>AC maintenance, cleaning, pest control, kitchen exhaust cleaning</dd>
-        <dt>Ideal customers</dt>
-        <dd>Clinics, offices, business centres, restaurants, gyms, training centres</dd>
-        <dt>Areas</dt>
-        <dd>{place ? `Near you (${place.label}), then ` : 'Near your location, then '}Al Khuwair, Ghubrah, Qurum, Bousher, Ghala, Ruwi{radius ? `, up to +${radius} km` : ''}</dd>
-        <dt>Sends from</dt>
-        <dd>sales@gulffacility.example</dd>
-        <dt>Per week</dt>
-        <dd>Up to 30 new businesses, emails only after your approval</dd>
+        {rows.map(([k, v]) => (
+          <div key={k} className="fact-row"><dt>{k}</dt><dd>{v}</dd></div>
+        ))}
+        {kind === 'leadgen' && (
+          <div className="fact-row">
+            <dt>Areas</dt>
+            <dd>{place ? `Near you (${place.label}), then ` : 'Near your location, then '}Al Khuwair, Ghubrah, Qurum, Bousher, Ghala, Ruwi{radius ? `, up to +${radius} km` : ''}</dd>
+          </div>
+        )}
       </dl>
     </section>
   )
@@ -891,7 +1064,7 @@ function AnimatedNumber({ value }) {
   return <>{shown}</>
 }
 
-function AgentBar({ client, isAdmin, running, step, progress, latestRun, place, radius, radiusNote, onRadius, focus }) {
+function AgentBar({ client, isAdmin, running, step, progress, latestRun, place, radius, radiusNote, onRadius, showRadius, calm, focus }) {
   const [text, setText] = useState('')
   const [pending, startTransition] = useTransition()
   const [error, setError] = useState('')
@@ -923,12 +1096,12 @@ function AgentBar({ client, isAdmin, running, step, progress, latestRun, place, 
         </p>
         <p className="agent-step">
           {running
-            ? <Typewriter text={step || 'Working on your leads'} />
+            ? (calm ? (step || 'Working on your leads') : <Typewriter text={step || 'Working on your leads'} />)
             : latestRun?.finished_at
               ? `Last run ${fmtDate(latestRun.finished_at)}: ${latestRun.summary || 'completed'}`
               : 'Ready to start'}
         </p>
-        <div className="agent-place-row">
+        {showRadius && <div className="agent-place-row">
           <span className="agent-place">
             <svg viewBox="0 0 24 24" aria-hidden="true" className="pin">
               <path d="M12 22s7-6.5 7-12a7 7 0 1 0-14 0c0 5.5 7 12 7 12z" fill="currentColor" />
@@ -944,8 +1117,8 @@ function AgentBar({ client, isAdmin, running, step, progress, latestRun, place, 
               ))}
             </select>
           </label>
-        </div>
-        {radiusNote && <p className="radius-note">{radiusNote}</p>}
+        </div>}
+        {showRadius && radiusNote && <p className="radius-note">{radiusNote}</p>}
         {progress !== null && (
           <span className="agent-progress" aria-hidden="true">
             <span style={{ width: `${progress * 100}%` }} />
@@ -1326,9 +1499,9 @@ function LeadPanel({ lead, isAdmin, outreach, followups, visits, showVisits, isD
   )
 }
 
-const FROM_DEMO = 'sales@gulffacility.example'
 
-function EmailScreen({ mode, lead, leadOutreach, drafts, leadById, isDemo, demoStep, onClose, onRefresh }) {
+function EmailScreen({ mode, lead, leadOutreach, drafts, leadById, isDemo, demoStep, clientId, kind, onClose, onRefresh }) {
+  const FROM_DEMO = DEMO_FROM[kind] || DEMO_FROM.leadgen
   const leadDraft = leadOutreach.find((o) => o.status === 'draft')
   const history = leadOutreach.filter((o) => o.status !== 'draft')
   const [view, setView] = useState(mode === 'all' ? 'all' : 'single')
@@ -1401,7 +1574,7 @@ function EmailScreen({ mode, lead, leadOutreach, drafts, leadById, isDemo, demoS
     setWriting(true)
     setError('')
     await wait(2500)
-    const res = await demoAction('draft')
+    const res = await demoAction('draft', clientId)
     setWriting(false)
     if (res?.error) setError(res.error)
     onClose()
@@ -1475,10 +1648,10 @@ function EmailScreen({ mode, lead, leadOutreach, drafts, leadById, isDemo, demoS
               </>
             ) : (
               <div className="mail-empty">
-                <p>The agent has not written an email for {lead?.business_name} yet.</p>
+                <p>The agent has not written a message for {lead?.business_name} yet.</p>
                 {isDemo && demoStep === 2 && (
                   <button className="btn btn-brass btn-lg" onClick={askAgentToWrite} disabled={writing}>
-                    {writing ? 'Writing emails...' : 'Ask the agent to write emails'}
+                    {writing ? 'Writing messages...' : 'Ask the agent to write messages'}
                   </button>
                 )}
                 {error && <p className="error">{error}</p>}
