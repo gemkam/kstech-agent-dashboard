@@ -13,6 +13,7 @@ import {
   finishAgentRun,
   demoAction,
   demoSend,
+  clientMarkSent,
 } from '../actions'
 
 const STATUS = {
@@ -140,7 +141,7 @@ function getDemoStep(leads, outreach) {
 }
 
 export default function Dashboard({
-  isAdmin, userEmail, clients, client, leads, outreach, followups, visitCounts, today, latestRun, events,
+  isAdmin, userEmail, clients, client, leads, outreach, followups, visitCounts, today, latestRun, events, sentTotal, firstSentAt,
 }) {
   const router = useRouter()
   const [query, setQuery] = useState('')
@@ -163,6 +164,14 @@ export default function Dashboard({
     const t = setInterval(() => router.refresh(), 15000)
     return () => clearInterval(t)
   }, [liveRunning, router])
+
+  // Keep numbers fresh: refresh every 30 s while the tab is visible
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (document.visibilityState === 'visible' && !anim) router.refresh()
+    }, 30000)
+    return () => clearInterval(t)
+  }, [router, anim])
 
   // In the demo, bring the section for the current step into view
   useEffect(() => {
@@ -260,6 +269,8 @@ export default function Dashboard({
             <button className="btn btn-ghost" type="submit" title={userEmail}>Sign out</button>
           </form>
         </div>
+        <SentCounter key={`c-${client.id}`} total={sentTotal} firstSentAt={firstSentAt} />
+        <StatusBadge key={client.id} isDemo={isDemo} />
       </header>
 
       <main className="content">
@@ -368,6 +379,7 @@ export default function Dashboard({
                   isAdmin={isAdmin}
                   onOpen={setOpenId}
                   onApproveAll={() => setEmailFor('all')}
+                  isDemo={isDemo}
                   focus={focusOn('sec-approvals')}
                 />
               )}
@@ -458,6 +470,161 @@ export default function Dashboard({
         />
       )}
     </div>
+  )
+}
+
+function LiveBadge() {
+  const [online, setOnline] = useState(true)
+  useEffect(() => {
+    const update = () => setOnline(navigator.onLine)
+    update()
+    window.addEventListener('online', update)
+    window.addEventListener('offline', update)
+    return () => {
+      window.removeEventListener('online', update)
+      window.removeEventListener('offline', update)
+    }
+  }, [])
+  return (
+    <span className={online ? 'live' : 'live live-off'} role="status" aria-label={online ? 'System live' : 'Offline'}>
+      <span className="live-dot" aria-hidden="true" />
+      {online ? 'Live' : 'Offline'}
+    </span>
+  )
+}
+
+// Month colours for the sent counter. Month 1 uses the default look,
+// month 2 is blue, 3 brown, 4 green, then the list continues and loops after the last one.
+const MONTH_COLORS = [
+  null,          // month 1: default
+  '#2563eb',     // 2 blue
+  '#8b5a2b',     // 3 brown
+  '#16a34a',     // 4 green
+  '#7c3aed',     // 5 purple
+  '#ea580c',     // 6 orange
+  '#db2777',     // 7 pink
+  '#0891b2',     // 8 cyan
+  '#b91c1c',     // 9 red
+  '#4d7c0f',     // 10 olive
+  '#1e3a8a',     // 11 navy
+  '#c026d3',     // 12 magenta
+  '#b45309',     // 13 amber
+  '#4338ca',     // 14 indigo
+  '#e11d48',     // 15 rose
+  '#047857',     // 16 emerald
+  '#7f1d1d',     // 17 maroon
+  '#0369a1',     // 18 ocean
+  '#6b21a8',     // 19 plum
+  '#a16207',     // 20 mustard
+  '#be123c',     // 21 crimson
+  '#0f766e',     // 22 teal
+  '#9a3412',     // 23 copper
+  '#475569',     // 24 slate
+]
+
+function monthNumber(firstSentAt) {
+  if (!firstSentAt) return 1
+  const start = new Date(firstSentAt)
+  const now = new Date()
+  let months = (now.getFullYear() - start.getFullYear()) * 12 + (now.getMonth() - start.getMonth())
+  if (now.getDate() < start.getDate()) months -= 1
+  return Math.max(1, months + 1)
+}
+
+// Running total of emails sent for this company. Counts every email ever sent, never resets.
+function SentCounter({ total, firstSentAt }) {
+  const [shown, setShown] = useState(total)
+  const [bump, setBump] = useState(false)
+  const month = monthNumber(firstSentAt)
+  const color = MONTH_COLORS[(month - 1) % MONTH_COLORS.length]
+
+  useEffect(() => {
+    if (total === shown) return
+    if (total < shown) { setShown(total); return }
+    setBump(true)
+    let n = shown
+    const step = Math.max(1, Math.ceil((total - shown) / 20))
+    const t = setInterval(() => {
+      n = Math.min(total, n + step)
+      setShown(n)
+      if (n >= total) { clearInterval(t); setTimeout(() => setBump(false), 600) }
+    }, 50)
+    return () => clearInterval(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [total])
+
+  return (
+    <span
+      className={`sent-counter${bump ? ' bump' : ''}${color ? ' tinted' : ''}`}
+      style={color ? { '--month-color': color } : undefined}
+      title={`Total emails sent since the start. Month ${month}.`}
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true" className="sent-icon">
+        <path d="M3 6h18v12H3z" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+        <path d="M3 7l9 6 9-6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+      </svg>
+      <span className="sent-num">{shown.toLocaleString('en-US')}</span>
+      <span className="sent-label">emails sent</span>
+      <span className="sent-month">M{month}</span>
+    </span>
+  )
+}
+
+// Top-right status light.
+// Demo: starts red "AI agent offline", switches to green "AI agent activated" after 3 seconds.
+// Both demo and real: turns red when the device loses internet (cable out, data off, Wi-Fi without internet)
+// and green again as soon as the connection is back.
+function StatusBadge({ isDemo }) {
+  const [phase, setPhase] = useState(isDemo ? 'booting' : 'live')
+  const [online, setOnline] = useState(true)
+
+  useEffect(() => {
+    if (!isDemo) return
+    const t = setTimeout(() => setPhase('live'), 3000)
+    return () => clearTimeout(t)
+  }, [isDemo])
+
+  useEffect(() => {
+    let alive = true
+
+    // Real check: ask the server every 8 seconds. Catches "Wi-Fi connected but no internet" too.
+    async function ping() {
+      if (!navigator.onLine) { if (alive) setOnline(false); return }
+      try {
+        const ctrl = new AbortController()
+        const timer = setTimeout(() => ctrl.abort(), 5000)
+        await fetch(`/login?ping=${Date.now()}`, { method: 'HEAD', cache: 'no-store', signal: ctrl.signal })
+        clearTimeout(timer)
+        if (alive) setOnline(true)
+      } catch {
+        if (alive) setOnline(false)
+      }
+    }
+
+    const goOffline = () => setOnline(false)
+    const goOnline = () => ping()
+    window.addEventListener('offline', goOffline)
+    window.addEventListener('online', goOnline)
+    ping()
+    const interval = setInterval(ping, 8000)
+    return () => {
+      alive = false
+      clearInterval(interval)
+      window.removeEventListener('offline', goOffline)
+      window.removeEventListener('online', goOnline)
+    }
+  }, [])
+
+  const on = online && phase === 'live'
+  const label = isDemo
+    ? (on ? 'AI agent activated' : 'AI agent offline')
+    : (online ? 'Live' : 'Offline')
+
+  return (
+    <span className={on ? 'status status-on' : 'status status-off'} role="status" aria-live="polite">
+      <span className="status-dot" aria-hidden="true" />
+      <span className="status-text">{label}</span>
+    </span>
   )
 }
 
@@ -605,7 +772,7 @@ function AgentBar({ client, isAdmin, running, step, progress, latestRun, focus }
   )
 }
 
-function Approvals({ drafts, approved, leadById, isAdmin, onOpen, onApproveAll, focus }) {
+function Approvals({ drafts, approved, leadById, isAdmin, onOpen, onApproveAll, isDemo, focus }) {
 
   return (
     <section id="sec-approvals" className={focus ? 'panel approvals focus' : 'panel approvals'} aria-label="Emails waiting for approval">
@@ -629,7 +796,10 @@ function Approvals({ drafts, approved, leadById, isAdmin, onOpen, onApproveAll, 
       )}
       {approved.length > 0 && (
         <>
-          <h3 className="approved-head">Approved, ready to send <span className="count">{approved.length}</span></h3>
+          <h3 className="approved-head">
+            {isDemo || isAdmin ? 'Approved, ready to send' : 'Approved, waiting for you to send'}
+            <span className="count-badge">{approved.length}</span>
+          </h3>
           <ul className="approved-list">
             {approved.map((o) => (
               <ApprovedRow key={o.id} o={o} lead={leadById[o.lead_id]} isAdmin={isAdmin} />
@@ -707,27 +877,46 @@ function DraftCard({ o, lead, onOpen }) {
   )
 }
 
+function mailtoLink(lead, o) {
+  const to = lead?.email || ''
+  const params = []
+  if (o.subject) params.push(`subject=${encodeURIComponent(o.subject)}`)
+  if (o.message_draft) params.push(`body=${encodeURIComponent(o.message_draft)}`)
+  return `mailto:${to}${params.length ? '?' + params.join('&') : ''}`
+}
+
 function ApprovedRow({ o, lead, isAdmin }) {
   const [pending, startTransition] = useTransition()
   const [error, setError] = useState('')
+  const [opened, setOpened] = useState(false)
+
+  function done(fn) {
+    setError('')
+    startTransition(async () => {
+      const res = await fn({ id: o.id })
+      if (res?.error) setError(res.error)
+    })
+  }
+
   return (
     <li className="approved-row">
-      <span>
+      <span className="approved-info">
         <span className="biz">{lead?.business_name || 'Lead'}</span>
         <span className="sub">Approved {fmtDate(o.reviewed_at)}{o.subject ? `, ${o.subject}` : ''}</span>
       </span>
-      {isAdmin && (
-        <button
-          className="btn btn-quiet"
-          disabled={pending}
-          onClick={() => startTransition(async () => {
-            const res = await markSent({ id: o.id })
-            if (res?.error) setError(res.error)
-          })}
-        >
-          {pending ? 'Saving...' : 'Mark sent'}
+      <span className="approved-actions">
+        {lead?.email ? (
+          <a className="btn btn-quiet" href={mailtoLink(lead, o)} onClick={() => setOpened(true)}>
+            Send from my email
+          </a>
+        ) : (
+          <span className="sub">No email address for this lead</span>
+        )}
+        <button className={opened ? 'btn btn-primary' : 'btn btn-plain'} disabled={pending}
+          onClick={() => done(isAdmin ? markSent : clientMarkSent)}>
+          {pending ? 'Saving...' : "I've sent it"}
         </button>
-      )}
+      </span>
       {error && <span className="error">{error}</span>}
     </li>
   )
@@ -1076,7 +1265,7 @@ function EmailScreen({ mode, lead, leadOutreach, drafts, leadById, isDemo, demoS
             </p>
             <p className="muted center">
               {result.kind === 'sent' && 'Replies will come to your inbox. The agent schedules a follow-up in 2 days for anyone who does not reply.'}
-              {result.kind === 'approved' && 'KS Tech sends approved emails from your company email. You will see them move to Contacted.'}
+              {result.kind === 'approved' && 'Next step: send it from your own email. You will find it under "Approved, waiting for you to send" on your dashboard.'}
               {result.kind === 'rejected' && 'This email will not be sent. The agent will not contact this business unless you ask.'}
             </p>
             <button className="btn btn-primary" onClick={onClose}>Back to dashboard</button>

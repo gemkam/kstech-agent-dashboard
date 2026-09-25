@@ -83,6 +83,15 @@ export async function markSent({ id }) {
   return { ok: true }
 }
 
+// Client (or admin): after sending an approved email from their own mailbox, record it
+export async function clientMarkSent({ id }) {
+  const supabase = createClient()
+  const { data, error } = await supabase.rpc('client_mark_sent', { p_id: id })
+  if (error || data !== 'ok') return { error: 'Could not mark as sent. Refresh and try again.' }
+  revalidatePath('/dashboard')
+  return { ok: true }
+}
+
 // Admin: switch the live agent indicator on / off for a real client
 export async function startAgentRun({ clientId, step }) {
   const supabase = createClient()

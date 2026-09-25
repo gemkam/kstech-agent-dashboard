@@ -44,7 +44,7 @@ export default async function DashboardPage({ searchParams }) {
     return <Notice title="No company linked to your account" text="KS Tech will link your account to your company shortly. Contact +968 9731 2049 if this takes long." />
   }
 
-  const [leadsRes, outreachRes, followupsRes, visitsRes, runRes, eventsRes] = await Promise.all([
+  const [leadsRes, outreachRes, followupsRes, visitsRes, runRes, eventsRes, sentRes, firstSentRes] = await Promise.all([
     supabase
       .from('leads')
       .select('id, ref_code, business_name, category, area, phone, email, website, google_maps_url, problem_found, problem_evidence, suggested_service, score, status, notes, created_at, updated_at')
@@ -75,6 +75,18 @@ export default async function DashboardPage({ searchParams }) {
       .eq('client_id', client.id)
       .order('created_at', { ascending: false })
       .limit(25),
+    supabase
+      .from('outreach')
+      .select('id', { count: 'exact', head: true })
+      .eq('client_id', client.id)
+      .not('sent_at', 'is', null),
+    supabase
+      .from('outreach')
+      .select('sent_at')
+      .eq('client_id', client.id)
+      .not('sent_at', 'is', null)
+      .order('sent_at', { ascending: true })
+      .limit(1),
   ])
 
   const visitCounts = {}
@@ -94,6 +106,8 @@ export default async function DashboardPage({ searchParams }) {
       visitCounts={visitCounts}
       latestRun={(runRes.data || [])[0] || null}
       events={eventsRes.data || []}
+      sentTotal={sentRes.count || 0}
+      firstSentAt={(firstSentRes.data || [])[0]?.sent_at || null}
       today={new Date().toISOString().slice(0, 10)}
     />
   )
