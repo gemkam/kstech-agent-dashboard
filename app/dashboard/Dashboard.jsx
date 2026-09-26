@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
   updateLead,
-  setFollowupDone,
   signOut,
   reviewOutreach,
   markSent,
@@ -18,6 +17,10 @@ import {
   setSearchRadius,
   demoExpand,
   switchDemo,
+  completeFollowup,
+  setDoNotContact,
+  clearDuplicate,
+  saveMailboxSetup,
 } from '../actions'
 
 const STATUS = {
@@ -34,6 +37,9 @@ const STATUS_ORDER = ['new', 'approved', 'contacted', 'replied', 'meeting', 'won
 const CONTACTED = ['contacted', 'replied', 'meeting', 'won', 'lost']
 const REPLIED = ['replied', 'meeting', 'won']
 const MEETING = ['meeting', 'won']
+// Once a lead has replied or is closed, follow-ups stop
+const CLOSED = ['replied', 'meeting', 'won', 'lost', 'skipped']
+const FOLLOWUP_DAYS = 3
 const CHANNEL = { email: 'Email', whatsapp: 'WhatsApp', call: 'Call', visit: 'Visit' }
 
 // Guided demo: what each step says, which button moves it on, and the animation shown
@@ -86,10 +92,10 @@ const DEMO = {
   5: {
     label: 'Replies',
     title: 'Waiting for replies',
-    text: 'The agent tracks who replies. Businesses that do not reply get a polite follow-up after two days.',
-    button: 'Show 2 days later',
+    text: 'The agent tracks who replies. Businesses that do not reply get a polite follow-up after three days.',
+    button: 'Show 3 days later',
     action: 'replies',
-    anim: ['Two days later', 'Checking replies'],
+    anim: ['Three days later', 'Checking replies'],
     target: 'sec-pipeline',
   },
   6: {
@@ -122,7 +128,7 @@ const DEMO_OVERRIDES = {
     3: { title: 'You approve every follow-up', text: 'Read each follow-up, then approve, edit or reject it. Nothing is sent without your approval.' },
     4: { title: 'Approved follow-ups are sent', text: 'Follow-ups go out from your own company email, so customers reply straight to you.', button: 'Send approved follow-ups',
          anim: ['Sending approved follow-ups from your company email', 'Scheduling a reminder for each customer'] },
-    5: { title: 'Waiting for customers to reply', text: 'The agent tracks who replies. Customers who stay quiet get one more polite reminder after two days.' },
+    5: { title: 'Waiting for customers to reply', text: 'The agent tracks who replies. Customers who stay quiet get one more polite reminder after three days.' },
     6: { title: '2 customers replied', text: 'Replies arrive in your inbox and show here. You confirm the order or book the site visit.' },
     7: { title: 'One week in: an order confirmed and a site visit booked', text: 'No quote is forgotten any more. Every price you send gets followed up until the customer decides.' },
   },
@@ -134,7 +140,7 @@ const DEMO_OVERRIDES = {
     3: { title: 'You approve every message', text: 'Read each booking invitation, then approve, edit or reject it. Nothing is sent without your approval.' },
     4: { title: 'Approved invitations are sent', text: 'Messages go out from your clinic WhatsApp, so people reply straight to you.', button: 'Send approved invitations',
          anim: ['Sending approved invitations from your clinic WhatsApp', 'Scheduling a reminder for each person'] },
-    5: { title: 'Waiting for replies', text: 'The agent tracks who replies. People who stay quiet get one friendly reminder after two days.' },
+    5: { title: 'Waiting for replies', text: 'The agent tracks who replies. People who stay quiet get one friendly reminder after three days.' },
     6: { title: '2 people replied', text: 'They picked a time. Your front desk confirms the appointment.' },
     7: { title: 'One week in: an appointment booked and a patient attended', text: 'Every enquiry gets an answer and a time. Fewer lost patients, fuller calendar.' },
   },
@@ -227,7 +233,7 @@ function getDemoStep(leads, outreach) {
 }
 
 export default function Dashboard({
-  isAdmin, userEmail, clients, demoClients = [], client, leads, outreach, followups, visitCounts, today, latestRun, events, sentTotal, firstSentAt,
+  isAdmin, userEmail, clients, demoClients = [], client, leads, outreach, followups, visitCounts, today, latestRun, events, sentTotal, firstSentAt, mailbox,
 }) {
   const router = useRouter()
   const [query, setQuery] = useState('')
@@ -365,7 +371,15 @@ export default function Dashboard({
     { key: 'won', label: stageLabels[4], count: leads.filter((l) => l.status === 'won').length },
   ]
   const messagesSent = outreach.filter((o) => ['sent', 'replied', 'no_reply'].includes(o.status)).length
-  const dueFollowups = followups.filter((f) => !f.done && f.due_date && f.due_date <= today)
+  const followupOpen = (f) => {
+    const l = leadById[f.lead_id]
+    return !f.done && f.due_date && (!l || (!l.do_not_contact && !CLOSED.includes(l.status)))
+  }
+  const dueFollowups = followups.filter((f) => followupOpen(f) && f.due_date <= today)
+  const dueLeadIds = new Set(dueFollowups.map((f) => f.lead_id))
+  const dncCount = leads.filter((l) => l.do_not_contact).length
+  const dupCount = leads.filter((l) => l.duplicate_of).length
+  const setup = mailboxProgress(mailbox)
   const drafts = outreach.filter((o) => o.status === 'draft')
   const approved = outreach.filter((o) => o.status === 'approved')
 
@@ -376,7 +390,10 @@ export default function Dashboard({
   }, [leads])
 
   const visibleLeads = leads.filter((l) => {
-    if (filter !== 'all' && l.status !== filter) return false
+    if (filter === 'dnc') { if (!l.do_not_contact) return false }
+    else if (filter === 'dup') { if (!l.duplicate_of) return false }
+    else if (filter === 'due') { if (!dueLeadIds.has(l.id)) return false }
+    else if (filter !== 'all' && l.status !== filter) return false
     if (!query) return true
     const q = query.toLowerCase()
     return [l.business_name, l.area, l.category, l.ref_code].some((v) => v && v.toLowerCase().includes(q))
@@ -467,6 +484,16 @@ export default function Dashboard({
 
         {isDemo && viewStep === 1 && <DemoProfile kind={kind} name={client.name} description={client.description} place={place} radius={radius} />}
 
+        {!isDemo && !setup.complete && (
+          <a href="#sec-mailbox" className="setup-banner" role="status">
+            <span className="setup-banner-dot" aria-hidden="true" />
+            <span>
+              <strong>Email setup {setup.done} of {setup.total} done.</strong>{' '}
+              Until it is finished, emails may land in spam. {isAdmin ? 'Finish the checklist.' : 'KS Tech is completing it with you.'}
+            </span>
+          </a>
+        )}
+
         {show(2) && (
           <SummaryBar
             outreach={outreach}
@@ -547,24 +574,27 @@ export default function Dashboard({
                 )}
               </section>
 
+              <MailboxPanel key={`mb-${client.id}`} clientId={client.id} mailbox={mailbox} isAdmin={isAdmin} isDemo={isDemo} />
+
               {show(5) && (
                 <section className="panel" aria-label="Follow-ups due">
                   <h2>Follow-ups due</h2>
                   {dueFollowups.length === 0 ? (
-                    <p className="empty">Nothing due today. New follow-ups appear here on their due date.</p>
+                    <p className="empty">Nothing due today. {FOLLOWUP_DAYS} days after an email is sent, a follow-up appears here if the business has not replied.</p>
                   ) : (
                     <ul className="fu-list">
                       {dueFollowups.map((f) => {
                         const lead = leadById[f.lead_id]
                         const overdue = f.due_date < today
                         return (
-                          <li key={f.id}>
+                          <li key={f.id} className="fu-row">
                             <button className="fu-item" onClick={() => setOpenId(f.lead_id)}>
                               <span className="fu-name">{lead?.business_name || 'Lead'}</span>
                               <span className={overdue ? 'fu-date overdue' : 'fu-date'}>
                                 {overdue ? `Overdue since ${fmtDate(f.due_date)}` : 'Due today'}
                               </span>
                             </button>
+                            {!isDemo && <FollowupDone id={f.id} />}
                           </li>
                         )
                       })}
@@ -586,6 +616,9 @@ export default function Dashboard({
                       {STATUS_ORDER.filter((s) => statusCounts[s]).map((s) => (
                         <option key={s} value={s}>{STATUS[s]} ({statusCounts[s]})</option>
                       ))}
+                      {dueLeadIds.size > 0 && <option value="due">Follow-up due ({dueLeadIds.size})</option>}
+                      {dupCount > 0 && <option value="dup">Possible duplicates ({dupCount})</option>}
+                      {dncCount > 0 && <option value="dnc">Do not contact ({dncCount})</option>}
                     </select>
                   </div>
                 </div>
@@ -611,10 +644,12 @@ export default function Dashboard({
                       <tbody>
                         {visibleLeads.map((l) => (
                           <tr key={l.id} onClick={() => setOpenId(l.id)} tabIndex={0}
+                            className={l.do_not_contact ? 'row-dnc' : undefined}
                             onKeyDown={(e) => { if (e.key === 'Enter') setOpenId(l.id) }}>
                             <td>
                               <span className="biz">{l.business_name}</span>
                               <span className="sub">{l.area}{l.category ? `, ${l.category.replace(/_/g, ' ')}` : ''}</span>
+                              <LeadTags lead={l} dueToday={dueLeadIds.has(l.id)} dupOf={l.duplicate_of ? leadById[l.duplicate_of] : null} isAdmin={isAdmin} />
                               <WhyLead lead={l} />
                             </td>
                             <td>{l.problem_found || <span className="sub">General fit</span>}</td>
@@ -640,6 +675,8 @@ export default function Dashboard({
           isAdmin={isAdmin}
           outreach={outreachByLead[openLead.id] || []}
           followups={followupsByLead[openLead.id] || []}
+          dupOf={openLead.duplicate_of ? leadById[openLead.duplicate_of] : null}
+          onOpenLead={setOpenId}
           visits={visitCounts[openLead.ref_code] || 0}
           showVisits={isAdmin && client.slug === 'kstech'}
           isDemo={isDemo}
@@ -1409,7 +1446,7 @@ function ApprovedRow({ o, lead, isAdmin }) {
   )
 }
 
-function LeadPanel({ lead, isAdmin, outreach, followups, visits, showVisits, isDemo, onEmail, onClose }) {
+function LeadPanel({ lead, isAdmin, outreach, followups, dupOf, onOpenLead, visits, showVisits, isDemo, onEmail, onClose }) {
   const [status, setStatus] = useState(lead.status)
   const [notes, setNotes] = useState(lead.notes || '')
   const [message, setMessage] = useState('')
@@ -1431,7 +1468,7 @@ function LeadPanel({ lead, isAdmin, outreach, followups, visits, showVisits, isD
 
   function toggleFollowup(f) {
     startTransition(async () => {
-      await setFollowupDone({ id: f.id, done: !f.done })
+      await completeFollowup({ id: f.id, done: !f.done })
     })
   }
 
@@ -1448,10 +1485,20 @@ function LeadPanel({ lead, isAdmin, outreach, followups, visits, showVisits, isD
         </div>
 
         <div className="drawer-body">
+          {lead.do_not_contact && (
+            <p className="dnc-note" role="status">
+              <strong>Do not contact.</strong> {lead.dnc_reason || 'Asked not to be contacted'}
+              {lead.dnc_at ? ` (since ${fmtDate(lead.dnc_at)})` : ''}. No emails or follow-ups will be written for this business.
+            </p>
+          )}
+          {dupOf && <DuplicateNote lead={lead} dupOf={dupOf} isAdmin={isAdmin} onOpenLead={onOpenLead} />}
+
           <div className="contact-row">
-            <button className="btn btn-primary" onClick={onEmail}>
-              {outreach.some((o) => o.status === 'draft') ? 'Email: review draft' : 'Email'}
-            </button>
+            {!lead.do_not_contact && (
+              <button className="btn btn-primary" onClick={onEmail}>
+                {outreach.some((o) => o.status === 'draft') ? 'Email: review draft' : 'Email'}
+              </button>
+            )}
             {!isDemo && lead.phone && <a className="btn btn-quiet" href={`tel:${lead.phone.replace(/\s/g, '')}`}>Call</a>}
             {!isDemo && lead.phone && <a className="btn btn-quiet" href={`https://wa.me/${lead.phone.replace(/\D/g, '')}`} target="_blank" rel="noreferrer">WhatsApp</a>}
             {!isDemo && lead.google_maps_url && <a className="btn btn-quiet" href={lead.google_maps_url} target="_blank" rel="noreferrer">Map</a>}
@@ -1524,7 +1571,7 @@ function LeadPanel({ lead, isAdmin, outreach, followups, visits, showVisits, isD
                       {f.done ? 'Done' : `Due ${fmtDate(f.due_date)}`}
                     </p>
                     {f.draft_message && <p className="msg-text">{f.draft_message}</p>}
-                    {isAdmin && (
+                    {!isDemo && (
                       <button className="btn btn-quiet" onClick={() => toggleFollowup(f)} disabled={pending}>
                         {f.done ? 'Mark not done' : 'Mark done'}
                       </button>
@@ -1534,9 +1581,216 @@ function LeadPanel({ lead, isAdmin, outreach, followups, visits, showVisits, isD
               </ul>
             )}
           </section>
+
+          {!isDemo && <DncSection lead={lead} isAdmin={isAdmin} />}
         </div>
       </aside>
     </div>
+  )
+}
+
+// Small tags on a lead row: do not contact, possible duplicate, follow-up due, missing reason
+function LeadTags({ lead, dueToday, dupOf, isAdmin }) {
+  const tags = []
+  if (lead.do_not_contact) tags.push(<span key="dnc" className="tag tag-dnc">Do not contact</span>)
+  if (dupOf) tags.push(<span key="dup" className="tag tag-dup">Possible duplicate of {dupOf.ref_code || dupOf.business_name}</span>)
+  if (dueToday && !lead.do_not_contact) tags.push(<span key="due" className="tag tag-due">Follow-up due</span>)
+  if (isAdmin && !lead.why_chosen && !lead.problem_found) tags.push(<span key="why" className="tag tag-dup">No reason written</span>)
+  if (!tags.length) return null
+  return <span className="tags">{tags}</span>
+}
+
+function FollowupDone({ id }) {
+  const [pending, startTransition] = useTransition()
+  return (
+    <button className="btn btn-plain fu-done" disabled={pending}
+      onClick={() => startTransition(async () => { await completeFollowup({ id, done: true }) })}>
+      {pending ? 'Saving...' : 'Done'}
+    </button>
+  )
+}
+
+function DuplicateNote({ lead, dupOf, isAdmin, onOpenLead }) {
+  const [pending, startTransition] = useTransition()
+  const [error, setError] = useState('')
+  return (
+    <div className="dup-note" role="status">
+      <p>
+        <strong>Possible duplicate.</strong> This looks like the same business as{' '}
+        <button className="link-btn" onClick={() => onOpenLead(dupOf.id)}>
+          {dupOf.ref_code ? `${dupOf.ref_code}, ` : ''}{dupOf.business_name}
+        </button>{' '}
+        ({STATUS[dupOf.status] || dupOf.status}). Check before contacting them again.
+      </p>
+      {isAdmin && (
+        <button className="btn btn-plain" disabled={pending}
+          onClick={() => startTransition(async () => {
+            const res = await clearDuplicate({ id: lead.id })
+            if (res?.error) setError(res.error)
+          })}>
+          Not a duplicate
+        </button>
+      )}
+      {error && <span className="error">{error}</span>}
+    </div>
+  )
+}
+
+const DNC_REASONS = ['Asked us to stop', 'Not interested', 'Wrong contact person', 'Already a customer', 'Other']
+
+function DncSection({ lead, isAdmin }) {
+  const [asking, setAsking] = useState(false)
+  const [reason, setReason] = useState(DNC_REASONS[0])
+  const [other, setOther] = useState('')
+  const [error, setError] = useState('')
+  const [pending, startTransition] = useTransition()
+
+  function save(on) {
+    setError('')
+    startTransition(async () => {
+      const text = reason === 'Other' ? other : reason
+      const res = await setDoNotContact({ id: lead.id, on, reason: text })
+      if (res?.error) setError(res.error)
+      else setAsking(false)
+    })
+  }
+
+  if (lead.do_not_contact) {
+    return isAdmin ? (
+      <section className="drawer-section">
+        <h3>Do-not-contact list</h3>
+        <p className="muted small">Only take a business off this list if they asked to hear from you again.</p>
+        <button className="btn btn-plain" onClick={() => save(false)} disabled={pending}>
+          {pending ? 'Saving...' : 'Remove from do-not-contact list'}
+        </button>
+        {error && <p className="error">{error}</p>}
+      </section>
+    ) : null
+  }
+
+  return (
+    <section className="drawer-section">
+      <h3>Do not contact</h3>
+      {!asking ? (
+        <>
+          <p className="muted small">If this business said stop or not interested, add it here. Open drafts and follow-ups are cancelled and nobody will write to them again.</p>
+          <button className="btn btn-plain btn-danger" onClick={() => setAsking(true)}>Do not contact this business</button>
+        </>
+      ) : (
+        <div className="edit">
+          <select value={reason} onChange={(e) => setReason(e.target.value)} aria-label="Reason">
+            {DNC_REASONS.map((r) => <option key={r} value={r}>{r}</option>)}
+          </select>
+          {reason === 'Other' && (
+            <input value={other} onChange={(e) => setOther(e.target.value)} placeholder="Short reason" aria-label="Other reason" maxLength={200} />
+          )}
+          <div className="edit-actions">
+            <button className="btn btn-primary btn-danger-solid" onClick={() => save(true)} disabled={pending}>
+              {pending ? 'Saving...' : 'Confirm: do not contact'}
+            </button>
+            <button className="btn btn-plain" onClick={() => setAsking(false)} disabled={pending}>Cancel</button>
+          </div>
+        </div>
+      )}
+      {error && <p className="error">{error}</p>}
+    </section>
+  )
+}
+
+// Outreach mailbox checklist. Without SPF, DKIM and DMARC, emails go to spam.
+const MAILBOX_STEPS = [
+  { key: 'mailbox_created', label: 'Outreach mailbox created', help: 'A separate address on your own domain, for example sales@yourcompany.com, so your main email stays safe.' },
+  { key: 'spf', label: 'SPF record added', help: 'A DNS record that tells inboxes which servers may send email for your domain.' },
+  { key: 'dkim', label: 'DKIM signing turned on', help: 'Adds a digital signature to every email, switched on in your email provider and added to DNS.' },
+  { key: 'dmarc', label: 'DMARC record added', help: 'A DNS record that tells inboxes what to do with emails that fail SPF or DKIM. Start with p=none.' },
+  { key: 'test_passed', label: 'Test email reached the inbox', help: 'A test email sent to Gmail and Outlook arrived in the inbox, not in spam.' },
+]
+
+function mailboxProgress(m) {
+  const done = MAILBOX_STEPS.filter((s) => m?.[s.key]).length
+  return { done, total: MAILBOX_STEPS.length, complete: done === MAILBOX_STEPS.length }
+}
+
+function MailboxPanel({ clientId, mailbox, isAdmin, isDemo }) {
+  const blank = { outreach_email: '', provider: '', notes: '', ...Object.fromEntries(MAILBOX_STEPS.map((s) => [s.key, false])) }
+  const [form, setForm] = useState({ ...blank, ...(mailbox || {}) })
+  const [editing, setEditing] = useState(false)
+  const [msg, setMsg] = useState('')
+  const [pending, startTransition] = useTransition()
+  const m = editing ? form : { ...blank, ...(mailbox || {}) }
+  const prog = mailboxProgress(m)
+  const canEdit = isAdmin && !isDemo
+
+  function save() {
+    setMsg('')
+    startTransition(async () => {
+      const res = await saveMailboxSetup({ clientId, ...form })
+      if (res?.error) setMsg(res.error)
+      else { setMsg('Saved'); setEditing(false) }
+    })
+  }
+
+  return (
+    <section id="sec-mailbox" className="panel mailbox" aria-label="Email setup">
+      <div className="panel-head">
+        <h2>Email setup</h2>
+        <span className={prog.complete ? 'tag tag-ok' : 'tag tag-due'}>{prog.done} of {prog.total}</span>
+      </div>
+      <span className="mb-track" aria-hidden="true"><span style={{ width: `${(prog.done / prog.total) * 100}%` }} /></span>
+      {m.outreach_email && !editing && <p className="sub">Sends from {m.outreach_email}{m.provider ? `, ${m.provider}` : ''}</p>}
+
+      {editing && (
+        <div className="edit mb-fields">
+          <input value={form.outreach_email || ''} onChange={(e) => setForm({ ...form, outreach_email: e.target.value })}
+            placeholder="Outreach email, e.g. sales@company.com" aria-label="Outreach email" />
+          <input value={form.provider || ''} onChange={(e) => setForm({ ...form, provider: e.target.value })}
+            placeholder="Provider, e.g. Google Workspace, Zoho, Microsoft 365" aria-label="Email provider" />
+        </div>
+      )}
+
+      <ul className="mb-list">
+        {MAILBOX_STEPS.map((s) => (
+          <li key={s.key} className={m[s.key] ? 'mb-item mb-done' : 'mb-item'}>
+            {editing ? (
+              <label className="mb-check">
+                <input type="checkbox" checked={Boolean(form[s.key])} onChange={(e) => setForm({ ...form, [s.key]: e.target.checked })} />
+                <span>{s.label}</span>
+              </label>
+            ) : (
+              <span className="mb-check">
+                <span className="mb-mark" aria-hidden="true">{m[s.key] ? '✓' : ''}</span>
+                <span>{s.label}<span className="sr-only">{m[s.key] ? ', done' : ', not done'}</span></span>
+              </span>
+            )}
+            {!m[s.key] && <span className="mb-help">{s.help}</span>}
+          </li>
+        ))}
+      </ul>
+
+      {editing && (
+        <textarea rows={2} value={form.notes || ''} onChange={(e) => setForm({ ...form, notes: e.target.value })}
+          placeholder="Notes, e.g. waiting for client's IT to add DNS records" aria-label="Notes" />
+      )}
+      {!editing && m.notes && <p className="note small">{m.notes}</p>}
+
+      {!prog.complete && !editing && !isAdmin && (
+        <p className="muted small">KS Tech finishes these steps with you before the first emails go out.</p>
+      )}
+
+      {canEdit && (
+        <div className="edit-actions">
+          {editing ? (
+            <>
+              <button className="btn btn-primary" onClick={save} disabled={pending}>{pending ? 'Saving...' : 'Save'}</button>
+              <button className="btn btn-plain" onClick={() => { setEditing(false); setForm({ ...blank, ...(mailbox || {}) }) }} disabled={pending}>Cancel</button>
+            </>
+          ) : (
+            <button className="btn btn-quiet" onClick={() => setEditing(true)}>Update checklist</button>
+          )}
+          {msg && <span className={msg === 'Saved' ? 'ok' : 'error'} role="status">{msg}</span>}
+        </div>
+      )}
+    </section>
   )
 }
 
@@ -1755,7 +2009,7 @@ function EmailScreen({ mode, lead, leadOutreach, drafts, leadById, isDemo, demoS
               {result.kind === 'rejected' && 'Email rejected'}
             </p>
             <p className="muted center">
-              {result.kind === 'sent' && 'Replies will come to your inbox. The agent schedules a follow-up in 2 days for anyone who does not reply.'}
+              {result.kind === 'sent' && 'Replies will come to your inbox. The agent schedules a follow-up in 3 days for anyone who does not reply.'}
               {result.kind === 'approved' && 'Next step: send it from your own email. You will find it under "Approved, waiting for you to send" on your dashboard.'}
               {result.kind === 'rejected' && 'This email will not be sent. The agent will not contact this business unless you ask.'}
             </p>

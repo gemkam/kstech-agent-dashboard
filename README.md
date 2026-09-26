@@ -30,6 +30,12 @@ Security is enforced by Supabase row-level security, not by the app.
 4. Admin sends the approved email, then clicks Mark sent. Lead becomes Contacted and a follow-up is scheduled in 4 days.
 5. Demo company: "Start agent" plays a full animated run and adds 3 sample drafts.
 
+## Before a client's first email
+- Email setup panel (right side of the dashboard): tick each step as it is done. Outreach mailbox, SPF, DKIM, DMARC, test email in inbox. A red banner shows until all 5 are done.
+- Do not contact: open a lead, "Do not contact this business". Cancels drafts and follow-ups; the database refuses any new draft for that business. Only admin can undo.
+- Duplicates: every new lead is checked against the same company's leads (name, phone last 8 digits, email). A match is tagged "Possible duplicate"; if the older one is on the do-not-contact list, the new one is too.
+- Follow-ups: due 3 days after "I've sent it". Closed automatically when the lead is marked Replied, Meeting, Won or Lost. Clients can mark them done.
+
 ## Adding a client
 1. /admin: Add company.
 2. Supabase: Add user with the client's email and a password.

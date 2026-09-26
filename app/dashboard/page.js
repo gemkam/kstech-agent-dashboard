@@ -44,10 +44,10 @@ export default async function DashboardPage({ searchParams }) {
     return <Notice title="No company linked to your account" text="KS Tech will link your account to your company shortly. Contact +968 9731 2049 if this takes long." />
   }
 
-  const [leadsRes, outreachRes, followupsRes, visitsRes, runRes, eventsRes, sentRes, firstSentRes] = await Promise.all([
+  const [leadsRes, outreachRes, followupsRes, visitsRes, runRes, eventsRes, sentRes, firstSentRes, mailboxRes] = await Promise.all([
     supabase
       .from('leads')
-      .select('id, ref_code, business_name, category, area, phone, email, website, google_maps_url, source, problem_found, problem_evidence, suggested_service, why_chosen, score, status, notes, created_at, updated_at')
+      .select('id, ref_code, business_name, category, area, phone, email, website, google_maps_url, source, problem_found, problem_evidence, suggested_service, why_chosen, score, status, notes, do_not_contact, dnc_reason, dnc_at, duplicate_of, created_at, updated_at')
       .eq('client_id', client.id)
       .order('created_at', { ascending: false }),
     supabase
@@ -87,6 +87,11 @@ export default async function DashboardPage({ searchParams }) {
       .not('sent_at', 'is', null)
       .order('sent_at', { ascending: true })
       .limit(1),
+    supabase
+      .from('mailbox_setup')
+      .select('outreach_email, provider, mailbox_created, spf, dkim, dmarc, test_passed, notes, updated_at')
+      .eq('client_id', client.id)
+      .maybeSingle(),
   ])
 
   // Demo login: list the demo companies so the presenter can switch between them
@@ -117,6 +122,7 @@ export default async function DashboardPage({ searchParams }) {
       events={eventsRes.data || []}
       sentTotal={sentRes.count || 0}
       firstSentAt={(firstSentRes.data || [])[0]?.sent_at || null}
+      mailbox={mailboxRes.data || null}
       today={new Date().toISOString().slice(0, 10)}
     />
   )

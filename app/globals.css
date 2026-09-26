@@ -664,3 +664,56 @@ textarea { width: 100%; resize: vertical; line-height: 1.6; }
 @media (max-width: 640px) {
   .guide-step-btn { justify-content: center; }
 }
+
+/* Lead tags: do not contact, duplicate, follow-up due */
+.tags { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.35rem; }
+.tag {
+  display: inline-block; font-size: 0.72rem; font-weight: 600; padding: 0.1rem 0.5rem;
+  border-radius: 999px; border: 1px solid var(--hair-2); color: var(--muted); white-space: nowrap;
+}
+.tag-dnc { color: var(--lost); border-color: rgba(240, 138, 126, 0.45); background: var(--lost-soft); }
+.tag-dup { color: var(--gold-bright); border-color: var(--hair); }
+.tag-due { color: var(--gold-bright); border-color: rgba(228, 199, 127, 0.45); background: var(--gold-soft); }
+.tag-ok { color: var(--won); border-color: rgba(111, 207, 151, 0.45); background: var(--won-soft); }
+.table tbody tr.row-dnc td { opacity: 0.6; }
+.table tbody tr.row-dnc .tag-dnc { opacity: 1; }
+
+/* Drawer notes */
+.dnc-note, .dup-note {
+  border-radius: var(--radius); padding: 0.75rem 0.9rem; font-size: 0.9rem; line-height: 1.45;
+}
+.dnc-note { border: 1px solid rgba(240, 138, 126, 0.45); background: var(--lost-soft); color: var(--text); }
+.dup-note { border: 1px solid var(--hair); background: var(--gold-soft); color: var(--text); display: flex; flex-direction: column; gap: 0.6rem; align-items: flex-start; }
+.btn-danger { color: var(--lost); border-color: rgba(240, 138, 126, 0.45); }
+.btn-danger:hover:not(:disabled) { color: var(--lost); border-color: var(--lost); background: var(--lost-soft); }
+.btn-danger-solid { background: var(--lost); border-color: var(--lost); color: #fff; }
+
+/* Follow-up done button */
+.fu-row { display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid var(--hair-2); }
+.fu-row .fu-item { border-bottom: 0; flex: 1; }
+.fu-done { padding: 0.3rem 0.7rem; font-size: 0.8rem; min-height: 0; }
+
+/* Email setup banner and checklist */
+.setup-banner {
+  display: flex; align-items: flex-start; gap: 0.6rem; text-decoration: none; color: var(--text);
+  padding: 0.8rem 1.1rem; border: 1px solid rgba(240, 138, 126, 0.45); border-radius: var(--radius-lg);
+  background: var(--lost-soft); font-size: 0.92rem; line-height: 1.45;
+}
+.setup-banner strong { color: var(--lost); }
+.setup-banner-dot { flex: none; width: 8px; height: 8px; margin-top: 0.45rem; border-radius: 50%; background: var(--lost); }
+.mailbox { display: flex; flex-direction: column; gap: 0.7rem; }
+.mb-track { display: block; height: 3px; background: var(--hair-2); overflow: hidden; }
+.mb-track > span { display: block; height: 100%; background: linear-gradient(90deg, var(--gold), var(--gold-bright)); transition: width 0.6s ease; }
+.mb-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.mb-item { display: flex; flex-direction: column; gap: 0.2rem; padding: 0.55rem 0; border-bottom: 1px solid var(--hair-2); }
+.mb-check { display: flex; align-items: center; gap: 0.55rem; font-size: 0.92rem; color: var(--text-2); }
+.mb-check input { width: 18px; height: 18px; accent-color: var(--gold); }
+.mb-mark {
+  flex: none; width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--hair);
+  display: inline-flex; align-items: center; justify-content: center; font-size: 0.72rem; color: var(--bg);
+}
+.mb-done .mb-mark { background: var(--won); border-color: var(--won); }
+.mb-done .mb-check { color: var(--text); }
+.mb-help { font-size: 0.8rem; color: var(--muted); padding-left: 1.6rem; line-height: 1.4; }
+.mb-fields input { width: 100%; }
+.mailbox textarea { width: 100%; }

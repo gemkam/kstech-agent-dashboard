@@ -5,6 +5,8 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 
 const LEAD_STATUSES = ['new', 'approved', 'skipped', 'contacted', 'replied', 'meeting', 'won', 'lost']
+// Same number of days as the client_mark_sent function in Supabase
+const FOLLOWUP_DAYS = 3
 
 export async function updateLead({ id, status, notes }) {
   if (!LEAD_STATUSES.includes(status)) return { error: 'Unknown status.' }
@@ -66,7 +68,7 @@ export async function markSent({ id }) {
   if (['new', 'approved'].includes(o.leads?.status)) {
     await supabase.from('leads').update({ status: 'contacted', updated_at: now }).eq('id', o.lead_id)
   }
-  const due = new Date(Date.now() + 4 * 86400000).toISOString().slice(0, 10)
+  const due = new Date(Date.now() + FOLLOWUP_DAYS * 86400000).toISOString().slice(0, 10)
   await supabase.from('followups').insert({
     lead_id: o.lead_id,
     outreach_id: o.id,
@@ -195,6 +197,64 @@ export async function addClient(formData) {
   if (!name || !slug) return
   await supabase.from('clients').insert({ name, slug })
   revalidatePath('/admin')
+}
+
+// Client or admin: mark a follow-up done / not done
+export async function completeFollowup({ id, done = true }) {
+  const supabase = createClient()
+  const { data, error } = await supabase.rpc('complete_followup', { p_id: id, p_done: done })
+  if (error || data !== 'ok') return { error: 'Could not update the follow-up.' }
+  revalidatePath('/dashboard')
+  return { ok: true }
+}
+
+// Client or admin: put a lead on the do-not-contact list (admin can also take it off)
+export async function setDoNotContact({ id, on, reason }) {
+  const supabase = createClient()
+  const { data, error } = await supabase.rpc('set_do_not_contact', {
+    p_lead: id,
+    p_on: Boolean(on),
+    p_reason: String(reason || '').slice(0, 200) || null,
+  })
+  if (error || data !== 'ok') {
+    const reasons = {
+      admin_only: 'Only KS Tech can take a business off the do-not-contact list.',
+      forbidden: 'You can only change leads of your own company.',
+    }
+    return { error: reasons[data] || 'Could not save. Refresh and try again.' }
+  }
+  revalidatePath('/dashboard')
+  return { ok: true }
+}
+
+// Admin: the duplicate warning was wrong, clear it
+export async function clearDuplicate({ id }) {
+  const supabase = createClient()
+  const { data, error } = await supabase.rpc('clear_duplicate', { p_lead: id })
+  if (error || data !== 'ok') return { error: 'Only admins can clear this.' }
+  revalidatePath('/dashboard')
+  return { ok: true }
+}
+
+// Admin: save the outreach mailbox checklist for a company
+export async function saveMailboxSetup(input) {
+  const supabase = createClient()
+  const row = {
+    client_id: input.clientId,
+    outreach_email: String(input.outreach_email || '').trim().slice(0, 120) || null,
+    provider: String(input.provider || '').trim().slice(0, 60) || null,
+    mailbox_created: Boolean(input.mailbox_created),
+    spf: Boolean(input.spf),
+    dkim: Boolean(input.dkim),
+    dmarc: Boolean(input.dmarc),
+    test_passed: Boolean(input.test_passed),
+    notes: String(input.notes || '').trim().slice(0, 500) || null,
+    updated_at: new Date().toISOString(),
+  }
+  const { error } = await supabase.from('mailbox_setup').upsert(row, { onConflict: 'client_id' })
+  if (error) return { error: 'Only admins can change the email setup.' }
+  revalidatePath('/dashboard')
+  return { ok: true }
 }
 
 export async function signOut() {

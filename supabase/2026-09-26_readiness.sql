@@ -1,0 +1,12 @@
+-- Already applied to Supabase project kstech-agents on 26 Sep 2026. Kept here for records only.
+-- Adds: do-not-contact list, duplicate flag, client follow-up completion,
+-- auto-close follow-ups on reply, mailbox setup checklist.
+-- See the migration "readiness_dnc_duplicates_followups_mailbox" in Supabase for the full SQL.
+--
+-- leads: do_not_contact, dnc_reason, dnc_at, duplicate_of
+-- functions: norm_name, norm_phone, norm_email, find_duplicate_leads, set_do_not_contact,
+--            clear_duplicate, complete_followup
+-- triggers: trg_flag_duplicate_lead (leads, before insert)
+--           trg_block_dnc_outreach (outreach, before insert: no drafts for do-not-contact leads)
+--           trg_close_followups (leads, after status update: replied/meeting/won/lost closes follow-ups)
+-- table: mailbox_setup (one row per company, admin writes, client reads)
