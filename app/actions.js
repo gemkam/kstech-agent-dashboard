@@ -106,7 +106,7 @@ export async function startAgentRun({ clientId, step }) {
   if (error) return { error: 'Only admins can start the agent.' }
   await supabase.from('agent_events').insert({ client_id: clientId, run_id: data.id, kind: 'start', message: `Agent started: ${text}` })
   revalidatePath('/dashboard')
-  return { ok: true }
+  return { ok: true, runId: data.id }
 }
 
 export async function finishAgentRun({ runId, clientId, summary }) {
@@ -227,6 +227,15 @@ export async function setDoNotContact({ id, on, reason }) {
   return { ok: true }
 }
 
+// Admin or client: save the current area (name only, never coordinates) as the search base
+export async function setBaseArea({ clientId, area }) {
+  const supabase = createClient()
+  const { data, error } = await supabase.rpc('set_base_area', { p_client: clientId, p_area: String(area || '').slice(0, 60) })
+  if (error || data !== 'ok') return { error: 'Could not save your area.' }
+  revalidatePath('/dashboard')
+  return { ok: true }
+}
+
 // Admin: the duplicate warning was wrong, clear it
 export async function clearDuplicate({ id }) {
   const supabase = createClient()
@@ -253,6 +262,173 @@ export async function saveMailboxSetup(input) {
   }
   const { error } = await supabase.from('mailbox_setup').upsert(row, { onConflict: 'client_id' })
   if (error) return { error: 'Only admins can change the email setup.' }
+  revalidatePath('/dashboard')
+  return { ok: true }
+}
+
+const clean = (v, max = 300) => {
+  const t = String(v ?? '').trim()
+  return t ? t.slice(0, max) : null
+}
+
+// Admin: check for possible duplicates before adding a lead
+export async function checkDuplicates({ clientId, name, phone, email }) {
+  const supabase = createClient()
+  const { data, error } = await supabase.rpc('find_duplicate_leads', {
+    p_client: clientId, p_name: name || '', p_phone: phone || '', p_email: email || '',
+  })
+  if (error) return { error: 'Could not check for duplicates.' }
+  return { ok: true, matches: data || [] }
+}
+
+// Admin: add a lead from the dashboard
+export async function addLead(input) {
+  const supabase = createClient()
+  const name = clean(input.business_name, 120)
+  if (!name) return { error: 'Business name is required.' }
+  const service = ['leadgen', 'quotes', 'booking'].includes(input.service) ? input.service : 'leadgen'
+  const score = Number(input.score)
+  const row = {
+    client_id: input.clientId,
+    service,
+    business_name: name,
+    category: clean(input.category, 60)?.toLowerCase().replace(/\s+/g, '_') || null,
+    area: clean(input.area, 60),
+    phone: clean(input.phone, 30),
+    whatsapp: clean(input.whatsapp, 30),
+    email: clean(input.email, 120)?.toLowerCase() || null,
+    website: clean(input.website, 200),
+    google_maps_url: clean(input.google_maps_url, 400),
+    source: clean(input.source, 60) || 'google_maps',
+    problem_found: clean(input.problem_found, 200),
+    problem_evidence: clean(input.problem_evidence, 400),
+    suggested_service: clean(input.suggested_service, 200),
+    why_chosen: clean(input.why_chosen, 500),
+    score: Number.isFinite(score) && score >= 1 && score <= 10 ? Math.round(score) : null,
+    status: 'new',
+  }
+  const { data, error } = await supabase.from('leads').insert(row).select('id, ref_code, duplicate_of, do_not_contact').single()
+  if (error) return { error: 'Could not add the lead. Only admins can add leads.' }
+  await supabase.from('agent_events').insert({ client_id: input.clientId, kind: 'find', message: `New lead added: ${name}` })
+  revalidatePath('/dashboard')
+  return { ok: true, lead: data }
+}
+
+// Ready-made first messages for businesses found by the live search (the client still approves each one)
+function templateMessage({ service, name, type, area, hasWebsite, ref, lang }) {
+  const link = `https://kstech-solutions.vercel.app/?ref=${ref}#work`
+  const where = area ? ` in ${area}` : ''
+  if (lang === 'ur') {
+    const line = service === 'quotes'
+      ? 'بہت سے کاروبار ان گاہکوں کو کھو دیتے ہیں جو قیمت پوچھ کر خاموش ہو جاتے ہیں۔ ہمارا ایجنٹ ہر قیمت کا فالو اپ کرتا ہے، اور آپ صرف سنجیدہ گاہکوں سے بات کرتے ہیں۔'
+      : service === 'booking'
+        ? 'جو لوگ اپائنٹمنٹ کے بارے میں پوچھتے ہیں مگر بک نہیں کرتے، ہمارا ایجنٹ ہر ایک کو دو خالی وقت بھیجتا ہے تاکہ کوئی گاہک ضائع نہ ہو۔'
+        : 'آپ کے مینو یا سروسز اور واٹس ایپ آرڈر کے ساتھ ایک سادہ ویب سائٹ سے نئے گاہک آپ تک آسانی سے پہنچ سکیں گے۔'
+    return `السلام علیکم۔ میں کامران ضیاء صدیقی ہوں، KS TECH LLC کا مالک، جو مسقط کی ایک آئی ٹی کمپنی ہے۔ ${line}\n${link}\nکیا میں آپ کو کچھ نمونے دکھا سکتا ہوں؟`
+  }
+  const intro = `Good day. I'm Kamran Zia Siddiquee, owner of KS TECH LLC, a Muscat-based IT company. I came across ${name}${where}.`
+  const body = service === 'quotes'
+    ? `Many businesses lose customers who ask for a price and then go quiet. Our agent follows up every quote for you, so you only talk to the serious buyers.`
+    : service === 'booking'
+      ? `When people message to ask about an appointment, some never book. Our booking agent answers every enquiry with two free times, so fewer customers slip away.`
+      : hasWebsite
+        ? `We help businesses like yours get more customers online, with online booking, WhatsApp ordering and follow-ups.`
+        : `I noticed ${name} has no website listed online, so people searching for a ${type.toLowerCase()} nearby may not find you. We build simple websites with WhatsApp ordering and booking.`
+  return `${intro} ${body}\n${link}\nCan I show you a few examples?`
+}
+
+// Admin: save businesses from the live search as leads, optionally with ready-made drafts
+export async function addFoundLeads({ clientId, service, items, withDrafts, searchedNear }) {
+  const supabase = createClient()
+  const svc = ['leadgen', 'quotes', 'booking'].includes(service) ? service : 'leadgen'
+  const list = Array.isArray(items) ? items.slice(0, 60) : []
+  let added = 0, drafts = 0, dup = 0, blocked = 0
+  for (const b of list) {
+    const name = clean(b.name, 120)
+    if (!name) continue
+    const gaps = Array.isArray(b.gaps) ? b.gaps.slice(0, 3) : []
+    const row = {
+      client_id: clientId,
+      service: svc,
+      business_name: name,
+      category: clean(b.typeKey || b.type, 60)?.toLowerCase().replace(/\s+/g, '_') || null,
+      area: clean(b.area, 60) || clean(searchedNear, 60),
+      phone: clean(b.phone, 30),
+      email: clean(b.email, 120)?.toLowerCase() || null,
+      website: clean(b.website, 200),
+      google_maps_url: clean(b.mapUrl, 400),
+      source: 'openstreetmap',
+      problem_found: gaps[0] || null,
+      problem_evidence: gaps.length ? `Public map listing: ${gaps.join(', ').toLowerCase()}` : null,
+      suggested_service: svc === 'quotes' ? 'Quote follow-up agent' : svc === 'booking' ? 'Booking agent' : (b.website ? 'Online booking and WhatsApp ordering' : 'Website with WhatsApp ordering'),
+      why_chosen: `${b.type || 'Business'} about ${Number(b.km || 0).toFixed(1)} km from ${searchedNear || 'the search area'}.${gaps.length ? ' ' + gaps.join('. ') + '.' : ''}`,
+      score: Number.isFinite(Number(b.score)) ? Math.max(1, Math.min(10, Math.round(Number(b.score)))) : null,
+      status: 'new',
+    }
+    const { data: lead, error } = await supabase.from('leads').insert(row).select('id, ref_code, duplicate_of, do_not_contact').single()
+    if (error || !lead) continue
+    added++
+    if (lead.duplicate_of) dup++
+    if (!withDrafts) continue
+    if (lead.do_not_contact) { blocked++; continue }
+    const channel = row.phone ? 'whatsapp' : row.email ? 'email' : null
+    if (!channel) continue
+    const langs = /pakistan|lahori|karachi|kolachi|peshawari|multani/i.test(`${name} ${b.cuisine || ''}`) ? ['en', 'ur'] : ['en']
+    for (const lang of langs) {
+      const { error: dErr } = await supabase.from('outreach').insert({
+        lead_id: lead.id,
+        client_id: clientId,
+        channel,
+        language: lang,
+        subject: channel === 'email' ? `Quick idea for ${name}` : null,
+        message_draft: templateMessage({ service: svc, name, type: b.type || 'business', area: row.area, hasWebsite: Boolean(b.website), ref: lead.ref_code, lang }),
+        status: 'draft',
+      })
+      if (!dErr) drafts++
+    }
+  }
+  if (added) {
+    await supabase.from('agent_events').insert({
+      client_id: clientId, kind: 'find',
+      message: `${added} lead${added === 1 ? '' : 's'} saved from live search${drafts ? `, ${drafts} draft${drafts === 1 ? '' : 's'} written` : ''}`,
+    })
+  }
+  revalidatePath('/dashboard')
+  return { ok: true, added, drafts, dup, blocked }
+}
+
+// Admin: write a message draft for a lead (goes to the client for approval)
+export async function addDraft(input) {
+  const supabase = createClient()
+  const message = clean(input.message, 4000)
+  if (!message) return { error: 'Write the message first.' }
+  const channel = ['email', 'whatsapp'].includes(input.channel) ? input.channel : 'email'
+  const language = ['en', 'ar', 'ur'].includes(input.language) ? input.language : 'en'
+  const { data: lead } = await supabase.from('leads').select('id, client_id, business_name, do_not_contact').eq('id', input.leadId).single()
+  if (!lead) return { error: 'Lead not found.' }
+  if (lead.do_not_contact) return { error: 'This business is on the do-not-contact list.' }
+  const { error } = await supabase.from('outreach').insert({
+    lead_id: lead.id,
+    client_id: lead.client_id,
+    channel,
+    language,
+    subject: channel === 'email' ? clean(input.subject, 200) : null,
+    message_draft: message,
+    status: 'draft',
+  })
+  if (error) return { error: 'Could not save the draft. Only admins can write drafts.' }
+  await supabase.from('agent_events').insert({ client_id: lead.client_id, kind: 'draft', message: `Message drafted for ${lead.business_name}` })
+  revalidatePath('/dashboard')
+  return { ok: true }
+}
+
+// Client or admin: record the result of a lead (replied, meeting, won, lost)
+export async function setResult({ id, status, note }) {
+  const supabase = createClient()
+  const { data, error } = await supabase.rpc('client_set_result', { p_lead: id, p_status: status, p_note: clean(note, 300) })
+  if (error || data !== 'ok') {
+    return { error: data === 'forbidden' ? 'You can only update your own leads.' : 'Could not save. Refresh and try again.' }
+  }
   revalidatePath('/dashboard')
   return { ok: true }
 }

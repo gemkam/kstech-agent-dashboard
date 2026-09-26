@@ -5,6 +5,8 @@ import { updateProfile, addClient, signOut } from '../actions'
 
 export const dynamic = 'force-dynamic'
 
+const DEMO_LABEL = { leadgen: 'Lead generation', quotes: 'Quote follow-up', booking: 'Booking' }
+
 export default async function AdminPage() {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -15,7 +17,7 @@ export default async function AdminPage() {
 
   const [{ data: profiles }, { data: clients }] = await Promise.all([
     supabase.from('profiles').select('user_id, email, role, client_id, created_at').order('created_at'),
-    supabase.from('clients').select('id, name, slug, is_demo').order('name'),
+    supabase.from('clients').select('id, name, slug, is_demo, demo_kind').order('is_demo').order('name'),
   ])
 
   return (
@@ -71,8 +73,10 @@ export default async function AdminPage() {
           <ul className="plain-list">
             {(clients || []).map((c) => (
               <li key={c.id}>
-                <Link href={`/dashboard?client=${c.slug}`}>{c.name}</Link>
-                {c.is_demo && <span className="sub"> (demo)</span>}
+                <Link href={`/dashboard?client=${c.slug}`}>
+                  {c.is_demo ? `Demo: ${DEMO_LABEL[c.demo_kind] || 'Lead generation'}` : c.name}
+                </Link>
+                {c.is_demo && <span className="sub"> ({c.name.replace(' (Demo)', '')})</span>}
               </li>
             ))}
           </ul>

@@ -25,7 +25,7 @@ export default async function DashboardPage({ searchParams }) {
   let client = null
 
   if (isAdmin) {
-    const { data } = await supabase.from('clients').select('id, name, slug, is_demo, demo_kind, description, search_radius_km').order('name')
+    const { data } = await supabase.from('clients').select('id, name, slug, is_demo, demo_kind, description, search_radius_km, services, base_area').order('name')
     clients = data || []
     client =
       clients.find((c) => c.slug === searchParams?.client) ||
@@ -34,7 +34,7 @@ export default async function DashboardPage({ searchParams }) {
   } else if (profile.client_id) {
     const { data } = await supabase
       .from('clients')
-      .select('id, name, slug, is_demo, demo_kind, description, search_radius_km')
+      .select('id, name, slug, is_demo, demo_kind, description, search_radius_km, services, base_area')
       .eq('id', profile.client_id)
       .single()
     client = data
@@ -47,12 +47,12 @@ export default async function DashboardPage({ searchParams }) {
   const [leadsRes, outreachRes, followupsRes, visitsRes, runRes, eventsRes, sentRes, firstSentRes, mailboxRes] = await Promise.all([
     supabase
       .from('leads')
-      .select('id, ref_code, business_name, category, area, phone, email, website, google_maps_url, source, problem_found, problem_evidence, suggested_service, why_chosen, score, status, notes, do_not_contact, dnc_reason, dnc_at, duplicate_of, created_at, updated_at')
+      .select('id, ref_code, business_name, category, area, phone, whatsapp, email, website, google_maps_url, source, problem_found, problem_evidence, suggested_service, why_chosen, score, status, notes, do_not_contact, dnc_reason, dnc_at, duplicate_of, service, created_at, updated_at')
       .eq('client_id', client.id)
       .order('created_at', { ascending: false }),
     supabase
       .from('outreach')
-      .select('id, lead_id, channel, subject, message_sent, message_draft, status, sent_at, replied_at, reviewed_at, created_at')
+      .select('id, lead_id, channel, language, subject, message_sent, message_draft, status, sent_at, replied_at, reviewed_at, created_at')
       .eq('client_id', client.id)
       .order('created_at', { ascending: false }),
     supabase

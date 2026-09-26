@@ -21,6 +21,12 @@ import {
   setDoNotContact,
   clearDuplicate,
   saveMailboxSetup,
+  setBaseArea,
+  checkDuplicates,
+  addLead,
+  addDraft,
+  setResult,
+  addFoundLeads,
 } from '../actions'
 
 const STATUS = {
@@ -167,6 +173,25 @@ const DEMO_FROM = {
 }
 
 const DEMO_TYPE_LABEL = { leadgen: 'Lead generation', quotes: 'Quote follow-up', booking: 'Booking' }
+const SERVICE_KEYS = ['leadgen', 'quotes', 'booking']
+const LANG_LABEL = { en: 'English', ar: 'Arabic', ur: 'Urdu' }
+const RTL = ['ar', 'ur']
+
+// Admin company list: demo companies are named by the service they show
+function companyLabel(c) {
+  if (!c.is_demo) return c.name
+  return `Demo: ${DEMO_TYPE_LABEL[c.demo_kind] || 'Lead generation'}`
+}
+
+// When a lead has the same message in several languages, keep one per lead (English first)
+function onePerLead(list) {
+  const pick = {}
+  for (const o of list) {
+    const cur = pick[o.lead_id]
+    if (!cur || ((o.language || 'en') === 'en' && (cur.language || 'en') !== 'en')) pick[o.lead_id] = o
+  }
+  return list.filter((o) => pick[o.lead_id] === o)
+}
 const RADIUS_OPTIONS = [0, 10, 20, 40, 60, 80, 100]
 const RADIUS_TOWNS = {
   10: 'Ghala and Azaiba', 20: 'Seeb and Al Mawaleh', 40: 'Al Khoud and Al Amerat',
@@ -215,9 +240,10 @@ async function detectArea() {
     const area = d.locality || d.city || ''
     const city = d.city && d.city !== area ? d.city : d.principalSubdivision || ''
     const name = [area, city].filter(Boolean).join(', ')
-    return name ? { area: area || city, label: name } : null
+    return name ? { area: area || city, label: name, lat: latitude, lon: longitude } : null
   } catch {
-    return null
+    const { latitude, longitude } = pos.coords
+    return { area: 'Muscat', label: 'Your location', lat: latitude, lon: longitude }
   }
 }
 
@@ -233,7 +259,8 @@ function getDemoStep(leads, outreach) {
 }
 
 export default function Dashboard({
-  isAdmin, userEmail, clients, demoClients = [], client, leads, outreach, followups, visitCounts, today, latestRun, events, sentTotal, firstSentAt, mailbox,
+  isAdmin, userEmail, clients, demoClients = [], client, leads: allLeads, outreach: allOutreach, followups: allFollowups,
+  visitCounts, today, latestRun, events, sentTotal, firstSentAt, mailbox,
 }) {
   const router = useRouter()
   const [query, setQuery] = useState('')
@@ -246,11 +273,31 @@ export default function Dashboard({
   const [radius, setRadius] = useState(client.search_radius_km || 0)
   const [reviewStep, setReviewStep] = useState(null) // a finished step the viewer tapped to look at again
   const [radiusNote, setRadiusNote] = useState('')
+  const [adding, setAdding] = useState(false)
+  const [live, setLive] = useState({ status: 'idle', items: [], where: '' }) // live map search results
+  const lastSearch = useRef('')
 
   const isDemo = client.is_demo
   const kind = client.demo_kind || 'leadgen'
+  const services = SERVICE_KEYS.filter((k) => (client.services || ['leadgen']).includes(k))
+  const [service, setService] = useState(services[0] || 'leadgen')
+
+  // Real companies: show one service at a time (lead generation, quote follow-up, booking)
+  const leads = useMemo(
+    () => (isDemo ? allLeads : allLeads.filter((l) => (l.service || 'leadgen') === service)),
+    [allLeads, isDemo, service]
+  )
+  const shownIds = useMemo(() => new Set(leads.map((l) => l.id)), [leads])
+  const outreach = useMemo(() => allOutreach.filter((o) => shownIds.has(o.lead_id)), [allOutreach, shownIds])
+  const followups = useMemo(() => allFollowups.filter((f) => shownIds.has(f.lead_id)), [allFollowups, shownIds])
+  const serviceCounts = useMemo(() => {
+    const c = {}
+    for (const l of allLeads) c[l.service || 'leadgen'] = (c[l.service || 'leadgen'] || 0) + 1
+    return c
+  }, [allLeads])
+
   const DEMO = getDemo(isDemo ? kind : 'leadgen')
-  const stageLabels = STAGE_LABELS[isDemo ? kind : 'leadgen']
+  const stageLabels = STAGE_LABELS[isDemo ? kind : service]
   const demoStep = isDemo ? getDemoStep(leads, outreach) : null
   const show = (minStep) => !isDemo || demoStep >= minStep
 
@@ -287,11 +334,13 @@ export default function Dashboard({
 
     let steps = step.anim || []
     let here = place
+    let livePromise = null
     if (step.action === 'find' && kind === 'leadgen') {
       setAnim({ steps: ['Checking your location (allow it so the agent searches near you)'], i: 0 })
       here = await detectArea()
       if (here) setPlace(here)
       const area = here?.area || 'Muscat'
+      livePromise = runLiveSearch(here, radius)
       steps = [
         'Reading your company profile',
         here ? `Your location: ${here.label}` : 'Location not shared, searching across Muscat',
@@ -306,14 +355,72 @@ export default function Dashboard({
       setAnim({ steps, i })
       await new Promise((r) => setTimeout(r, step.action === 'find' ? 2000 : 1600))
     }
+    if (livePromise) {
+      const found = await livePromise
+      setAnim({ steps: [found > 0 ? `${found} real businesses found near you, showing them live` : 'Live search finished'], i: 0 })
+      await new Promise((r) => setTimeout(r, 1400))
+    }
     const res = await demoAction(step.action, client.id)
     if (!res?.error && step.action === 'find' && kind === 'leadgen' && here?.area) {
       await demoSetArea(here.area, client.id)
     }
-    if (!res?.error && step.action === 'reset') setPlace(null)
+    if (!res?.error && step.action === 'reset') { setPlace(null); setLive({ status: 'idle', items: [], where: '' }) }
     setAnim(null)
     if (res?.error) setDemoError(res.error)
     router.refresh()
+  }
+
+  // Real search of public map listings (OpenStreetMap). Demo: shown only. Admin: pick results to save as leads.
+  // text: optional, e.g. "find clinics near Al Khuwair +10 km". here: a known point (demo location).
+  async function runLiveSearch(here, km, text = '') {
+    const lib = await import('@/lib/liveSearch')
+    const q = lib.parseQuery(text)
+    const dist = q.km ?? km ?? 0
+    if (q.km != null && RADIUS_OPTIONS.includes(q.km)) setRadius(q.km)
+    setLive({ status: 'loading', items: [], where: q.place || here?.label || client.base_area || 'your area', label: q.label, km: dist })
+
+    let runId = null
+    const realRun = isAdmin && !isDemo
+    if (realRun) {
+      const r = await startAgentRun({ clientId: client.id, step: `${DEMO_TYPE_LABEL[service]}: searching ${q.label}${q.place ? ` near ${q.place}` : ''}${dist ? ` (+${dist} km)` : ''}` })
+      runId = r?.runId || null
+      router.refresh()
+    }
+    const finish = async (summary) => {
+      if (realRun && runId) { await finishAgentRun({ runId, clientId: client.id, summary }); router.refresh() }
+    }
+
+    try {
+      let point = null
+      if (q.place) {
+        point = await lib.geocode(q.place)
+        if (!point) {
+          setLive({ status: 'noplace', items: [], where: q.place, label: q.label, km: dist })
+          await finish(`Place "${q.place}" not found on the map`)
+          return 0
+        }
+      } else if (here?.lat != null) {
+        point = here
+      } else if (!isDemo && client.base_area) {
+        point = await lib.geocode(client.base_area)
+      }
+      if (!point) {
+        const mine = await detectArea()
+        point = mine?.lat != null ? mine : null
+      }
+      const fallback = !point
+      if (fallback) point = { lat: 23.5880, lon: 58.4060, label: 'Al Khuwair, Muscat' }
+      const where = fallback ? 'Al Khuwair, Muscat (location not shared)' : point.label
+
+      const items = await lib.searchNearby({ lat: point.lat, lon: point.lon, km: dist, sel: q.sel, cuisine: q.cuisine, max: q.everything ? 120 : 60 })
+      setLive({ status: 'done', items, where, label: q.label, km: dist, near: point.label })
+      await finish(`Found ${items.length} ${q.label} near ${point.label}${dist ? ` (+${dist} km)` : ''}`)
+      return items.length
+    } catch {
+      setLive((l) => ({ ...l, status: 'error', items: [] }))
+      await finish('Search stopped: the map service was busy')
+      return 0
+    }
   }
 
   async function changeRadius(km) {
@@ -326,6 +433,7 @@ export default function Dashboard({
         : `Saved. The agent will search up to +${km} km in the next run.`))
       return
     }
+    if (kind === 'leadgen' && demoStep >= 2 && live.status !== 'idle') runLiveSearch(place, km)
     if (km === 0) return
     if (demoStep < 2) {
       setRadiusNote(`The agent will search up to +${km} km when you press Start agent.`)
@@ -431,8 +539,9 @@ export default function Dashboard({
             <label className="client-switch">
               <span className="sr-only">Viewing company</span>
               <select value={client.slug} onChange={(e) => router.push(`/dashboard?client=${e.target.value}`)}>
-                {clients.map((c) => (
-                  <option key={c.id} value={c.slug}>{c.name}</option>
+                {[...clients.filter((c) => !c.is_demo), ...clients.filter((c) => c.is_demo)
+                  .sort((x, y) => SERVICE_KEYS.indexOf(x.demo_kind) - SERVICE_KEYS.indexOf(y.demo_kind))].map((c) => (
+                  <option key={c.id} value={c.slug}>{companyLabel(c)}</option>
                 ))}
               </select>
             </label>
@@ -443,6 +552,7 @@ export default function Dashboard({
           )}
           <ThemeToggle />
           {isAdmin && <Link href="/admin" className="btn btn-ghost">Users</Link>}
+          {!isDemo && <Link href="/account" className="btn btn-ghost" title="Change password">Account</Link>}
           <form action={signOut}>
             <button className="btn btn-ghost" type="submit" title={userEmail}>Sign out</button>
           </form>
@@ -466,8 +576,14 @@ export default function Dashboard({
           />
         )}
 
+        {!isDemo && services.length > 1 && (
+          <ServiceTabs services={services} current={service} counts={serviceCounts}
+            onPick={(s) => { setService(s); setFilter('all'); setOpenId(null) }} />
+        )}
+
         <AgentBar
           client={client}
+          service={isDemo ? kind : service}
           isAdmin={isAdmin}
           running={running}
           step={anim ? anim.steps[anim.i] : latestRun?.current_step}
@@ -478,9 +594,15 @@ export default function Dashboard({
           radiusNote={radiusNote}
           onRadius={changeRadius}
           showRadius={!isDemo || kind === 'leadgen'}
+          isDemo={isDemo}
+          canSearch={(isAdmin && !isDemo) || (isDemo && kind === 'leadgen' && demoStep >= 2)}
+          searching={live.status === 'loading'}
+          onSearch={(text) => { lastSearch.current = text; return runLiveSearch(place, radius, text) }}
           calm={!isDemo}
           focus={focusOn('sec-agent')}
         />
+
+        {isDemo && demoStep === 7 && !anim && <DemoPrices kind={kind} />}
 
         {isDemo && viewStep === 1 && <DemoProfile kind={kind} name={client.name} description={client.description} place={place} radius={radius} />}
 
@@ -517,6 +639,13 @@ export default function Dashboard({
             isDemo={isDemo}
             focus={focusOn('sec-approvals')}
           />
+        )}
+
+        {((isDemo && kind === 'leadgen' && show(2)) || (!isDemo && isAdmin)) && live.status !== 'idle' && (
+          <LiveResults live={live} isDemo={isDemo} service={service} clientId={client.id}
+            onRetry={() => runLiveSearch(place, radius, lastSearch.current)}
+            onClear={() => setLive({ status: 'idle', items: [], where: '' })}
+            onSaved={() => router.refresh()} />
         )}
 
         {show(2) && (
@@ -609,6 +738,9 @@ export default function Dashboard({
                 <div className="leads-head">
                   <h2>Leads <span className="count">{visibleLeads.length}</span></h2>
                   <div className="leads-tools">
+                    {isAdmin && !isDemo && !adding && (
+                      <button className="btn btn-brass" onClick={() => setAdding(true)}>+ Add lead</button>
+                    )}
                     <input type="search" placeholder="Search name, area, category" value={query}
                       onChange={(e) => setQuery(e.target.value)} aria-label="Search leads" />
                     <select value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter by status">
@@ -622,6 +754,11 @@ export default function Dashboard({
                     </select>
                   </div>
                 </div>
+
+                {adding && (
+                  <AddLeadForm clientId={client.id} service={service} onOpenLead={setOpenId}
+                    onDone={(id) => { setAdding(false); if (id) setOpenId(id) }} />
+                )}
 
                 {visibleLeads.length === 0 ? (
                   <p className="empty">
@@ -1142,18 +1279,34 @@ function AnimatedNumber({ value }) {
   return <>{shown}</>
 }
 
-function AgentBar({ client, isAdmin, running, step, progress, latestRun, place, radius, radiusNote, onRadius, showRadius, calm, focus }) {
+function AgentBar({ client, service, isAdmin, isDemo, canSearch, searching, onSearch, running, step, progress, latestRun, place, radius, radiusNote, onRadius, showRadius, calm, focus }) {
+  const router = useRouter()
+  const [locating, setLocating] = useState(false)
+  const [locNote, setLocNote] = useState('')
+
+  async function useMyLocation() {
+    setLocNote('')
+    setLocating(true)
+    const here = await detectArea()
+    if (!here) {
+      setLocating(false)
+      setLocNote('Location not available. Allow location for this site in your browser, then try again.')
+      return
+    }
+    const res = await setBaseArea({ clientId: client.id, area: here.label })
+    setLocating(false)
+    setLocNote(res?.error || `Nearby now means around ${here.label}.`)
+    router.refresh()
+  }
   const [text, setText] = useState('')
   const [pending, startTransition] = useTransition()
   const [error, setError] = useState('')
 
-  function start() {
+  function search() {
     setError('')
-    startTransition(async () => {
-      const res = await startAgentRun({ clientId: client.id, step: text })
-      if (res?.error) setError(res.error)
-      setText('')
-    })
+    const t = text.trim()
+    if (!t) { setError('Type what to find, e.g. find clinics near Al Khuwair +10 km'); return }
+    startTransition(async () => { await onSearch(t) })
   }
   function finish() {
     setError('')
@@ -1185,11 +1338,16 @@ function AgentBar({ client, isAdmin, running, step, progress, latestRun, place, 
               <path d="M12 22s7-6.5 7-12a7 7 0 1 0-14 0c0 5.5 7 12 7 12z" fill="currentColor" />
               <circle cx="12" cy="10" r="2.6" fill="var(--bg)" />
             </svg>
-            {place ? place.label : client.is_demo ? 'Your location' : 'Your service area'}
+            {place ? place.label : client.is_demo ? 'Your location' : client.base_area || 'Your service area'}
           </span>
+          {!isDemo && (
+            <button type="button" className="btn btn-plain loc-btn" onClick={useMyLocation} disabled={locating || running}>
+              {locating ? 'Finding you...' : client.base_area ? 'Update location' : 'Use my location'}
+            </button>
+          )}
           <label className="radius">
             <span className="sr-only">Search distance</span>
-            <select value={radius} onChange={(e) => onRadius(Number(e.target.value))} disabled={running}>
+            <select value={radius} onChange={(e) => onRadius(Number(e.target.value))} disabled={running && isDemo}>
               {RADIUS_OPTIONS.map((km) => (
                 <option key={km} value={km}>{km === 0 ? 'Nearby' : `+${km} km`}</option>
               ))}
@@ -1197,6 +1355,7 @@ function AgentBar({ client, isAdmin, running, step, progress, latestRun, place, 
           </label>
         </div>}
         {showRadius && radiusNote && <p className="radius-note">{radiusNote}</p>}
+        {locNote && <p className="radius-note">{locNote}</p>}
         {progress !== null && (
           <span className="agent-progress" aria-hidden="true">
             <span style={{ width: `${progress * 100}%` }} />
@@ -1204,23 +1363,32 @@ function AgentBar({ client, isAdmin, running, step, progress, latestRun, place, 
         )}
       </div>
 
-      {isAdmin && !client.is_demo && (
+      {canSearch && (
         <div className="agent-actions">
-          <div className="agent-admin">
+          <form className="agent-admin" onSubmit={(e) => { e.preventDefault(); if (!pending && !searching) search() }}>
             <input
               value={text}
               onChange={(e) => setText(e.target.value)}
-              placeholder={running ? 'Summary, e.g. 12 leads found, 12 drafts' : 'What is the agent doing?'}
-              aria-label={running ? 'Run summary' : 'Current step'}
+              placeholder="e.g. find clinics near Al Khuwair +10 km"
+              aria-label="What should the agent find?"
+              enterKeyHint="search"
             />
-            {running ? (
-              <button className="btn btn-brass" onClick={finish} disabled={pending}>Finish run</button>
-            ) : (
-              <button className="btn btn-brass" onClick={start} disabled={pending}>Start run</button>
-            )}
+            <button type="submit" className="btn btn-brass" disabled={pending || searching}>{searching ? 'Searching...' : 'Search'}</button>
             {error && <span className="error">{error}</span>}
-          </div>
+          </form>
+          {isAdmin && !isDemo && running && !searching && (
+            <button type="button" className="link-btn small" onClick={finish} disabled={pending}>Stop the old run</button>
+          )}
         </div>
+      )}
+
+      {canSearch && isAdmin && !isDemo && (
+        <SearchHelp
+          area={(client.base_area || 'Al Khuwair').split(',')[0]}
+          km={radius || 10}
+          disabled={pending || searching}
+          onPick={(q) => { setText(q); setError(''); startTransition(async () => { await onSearch(q) }) }}
+        />
       )}
     </section>
   )
@@ -1232,13 +1400,13 @@ function Approvals({ drafts, approved, leadById, isAdmin, onOpen, onApproveAll, 
     <section id="sec-approvals" className={focus ? 'panel approvals focus' : 'panel approvals'} aria-label="Emails waiting for approval">
       <div className="panel-head">
         <h2>Waiting for your approval <span className="count">{drafts.length}</span></h2>
-        {drafts.length > 1 && (
+        {onePerLead(drafts).length > 1 && (
           <button className="btn btn-quiet" onClick={onApproveAll}>
-            Approve all ({drafts.length})
+            Approve all ({onePerLead(drafts).length})
           </button>
         )}
       </div>
-      <p className="muted small">Nothing is sent until you approve it.</p>
+      <p className="muted small">Nothing is sent until you approve it.{drafts.some((o) => o.language && o.language !== 'en') ? ' Where a message has two languages, approve the one you want; the other is cancelled.' : ''}</p>
       {drafts.length === 0 && approved.length === 0 ? (
         <p className="empty">No emails to review. When the agent writes new emails, they appear here before anything is sent.</p>
       ) : (
@@ -1360,7 +1528,10 @@ function DraftCard({ o, lead, onOpen }) {
           <button className="link-btn" onClick={() => onOpen(o.lead_id)}>{lead?.business_name || 'Lead'}</button>
           <WhyLead lead={lead} compact />
         </span>
-        <span className="sub">{CHANNEL[o.channel] || o.channel}{lead?.email && o.channel === 'email' ? ` to ${lead.email}` : ''}</span>
+        <span className="sub">
+          {o.language && o.language !== 'en' && <span className="tag tag-lang">{LANG_LABEL[o.language] || o.language}</span>}{' '}
+          {CHANNEL[o.channel] || o.channel}{lead?.email && o.channel === 'email' ? ` to ${lead.email}` : ''}
+        </span>
       </div>
 
       {editing ? (
@@ -1368,12 +1539,12 @@ function DraftCard({ o, lead, onOpen }) {
           {o.channel === 'email' && (
             <input value={subject} onChange={(e) => setSubject(e.target.value)} aria-label="Subject" placeholder="Subject" />
           )}
-          <textarea rows={8} value={body} onChange={(e) => setBody(e.target.value)} aria-label="Message" />
+          <textarea rows={8} value={body} onChange={(e) => setBody(e.target.value)} aria-label="Message" dir={RTL.includes(o.language) ? 'rtl' : undefined} />
         </div>
       ) : (
         <>
           {o.subject && <p className="draft-subject">{o.subject}</p>}
-          <p className={expanded ? 'draft-body' : 'draft-body clamp'}>{o.message_draft}</p>
+          <p className={expanded ? 'draft-body' : 'draft-body clamp'} dir={RTL.includes(o.language) ? 'rtl' : undefined} lang={o.language || 'en'}>{o.message_draft}</p>
           <button className="link-btn small" onClick={() => setExpanded(!expanded)}>
             {expanded ? 'Show less' : 'Read full message'}
           </button>
@@ -1409,6 +1580,12 @@ function mailtoLink(lead, o) {
   return `mailto:${to}${params.length ? '?' + params.join('&') : ''}`
 }
 
+function whatsappLink(lead, o) {
+  let num = String(lead.whatsapp || lead.phone || '').replace(/\D/g, '')
+  if (num.length === 8) num = '968' + num
+  return `https://wa.me/${num}?text=${encodeURIComponent(o.message_draft || '')}`
+}
+
 function ApprovedRow({ o, lead, isAdmin }) {
   const [pending, startTransition] = useTransition()
   const [error, setError] = useState('')
@@ -1429,12 +1606,16 @@ function ApprovedRow({ o, lead, isAdmin }) {
         <span className="sub">Approved {fmtDate(o.reviewed_at)}{o.subject ? `, ${o.subject}` : ''}</span>
       </span>
       <span className="approved-actions">
-        {lead?.email ? (
+        {o.channel === 'whatsapp' && (lead?.whatsapp || lead?.phone) ? (
+          <a className="btn btn-quiet" href={whatsappLink(lead, o)} target="_blank" rel="noreferrer" onClick={() => setOpened(true)}>
+            Send on WhatsApp{o.language === 'ur' ? ' (Urdu)' : ''}
+          </a>
+        ) : lead?.email ? (
           <a className="btn btn-quiet" href={mailtoLink(lead, o)} onClick={() => setOpened(true)}>
             Send from my email
           </a>
         ) : (
-          <span className="sub">No email address for this lead</span>
+          <span className="sub">No {o.channel === 'whatsapp' ? 'WhatsApp number' : 'email address'} for this lead</span>
         )}
         <button className={opened ? 'btn btn-primary' : 'btn btn-plain'} disabled={pending}
           onClick={() => done(isAdmin ? markSent : clientMarkSent)}>
@@ -1516,6 +1697,10 @@ function LeadPanel({ lead, isAdmin, outreach, followups, dupOf, onOpenLead, visi
             {showVisits && (<><dt>Link opens</dt><dd>{visits}</dd></>)}
           </dl>
 
+          {!isDemo && !lead.do_not_contact && <ResultButtons lead={lead} />}
+
+          {isAdmin && !isDemo && !lead.do_not_contact && <DraftForm lead={lead} />}
+
           <section className="drawer-section">
             <h3>Status and notes</h3>
             {isAdmin ? (
@@ -1549,10 +1734,11 @@ function LeadPanel({ lead, isAdmin, outreach, followups, dupOf, onOpenLead, visi
                   <li key={o.id} className="msg">
                     <p className="msg-meta">
                       {CHANNEL[o.channel] || o.channel}
-                      {o.sent_at ? `, sent ${fmtDate(o.sent_at)}` : ', draft'}
+                      {o.language && o.language !== 'en' ? `, ${LANG_LABEL[o.language] || o.language}` : ''}
+                      {o.sent_at ? `, sent ${fmtDate(o.sent_at)}` : o.status === 'rejected' ? ', cancelled' : ', draft'}
                       {o.replied_at ? `, replied ${fmtDate(o.replied_at)}` : ''}
                     </p>
-                    <p className="msg-text">{o.message_sent || o.message_draft}</p>
+                    <p className="msg-text" dir={RTL.includes(o.language) ? 'rtl' : undefined}>{o.message_sent || o.message_draft}</p>
                   </li>
                 ))}
               </ul>
@@ -1586,6 +1772,399 @@ function LeadPanel({ lead, isAdmin, outreach, followups, dupOf, onOpenLead, visi
         </div>
       </aside>
     </div>
+  )
+}
+
+// Pilot and package prices shown at the end of the demo. Change the numbers here.
+const PLANS = [
+  { name: 'Starter', price: 'from 60 OMR', per: 'per month', points: ['1 service', 'Up to 40 businesses or enquiries a month', 'You approve every message', 'Monthly PDF report'] },
+  { name: 'Growth', price: 'from 120 OMR', per: 'per month', featured: true, points: ['2 services', 'Up to 100 businesses or enquiries a month', 'Follow-ups handled for you', 'Weekly results'] },
+  { name: 'Pro', price: 'from 200 OMR', per: 'per month', points: ['All 3 services', 'Up to 200 businesses or enquiries a month', 'English, Arabic and Urdu messages', 'Priority support'] },
+]
+const PILOT_TEXT = 'Good day Kamran, I saw the KS Tech agent demo and would like to start a pilot.'
+
+function DemoPrices({ kind }) {
+  return (
+    <section className="panel prices" aria-label="Packages">
+      <p className="guide-kicker">Ready to start?</p>
+      <h2>Start with a one-month pilot</h2>
+      <p className="muted">Setup from 30 OMR, 3-month minimum after the pilot. We guarantee the work gets done every week; the sales are yours to close.</p>
+      <div className="plan-grid">
+        {PLANS.map((p) => (
+          <div key={p.name} className={p.featured ? 'plan plan-featured' : 'plan'}>
+            {p.featured && <span className="plan-badge">Most chosen</span>}
+            <h3>{p.name}</h3>
+            <p className="plan-price">{p.price}</p>
+            <p className="sub">{p.per}</p>
+            <ul>{p.points.map((x) => <li key={x}>{x}</li>)}</ul>
+          </div>
+        ))}
+      </div>
+      <div className="plan-cta">
+        <a className="btn btn-brass btn-lg" href={`https://wa.me/96897312049?text=${encodeURIComponent(PILOT_TEXT)}`} target="_blank" rel="noreferrer">
+          Start a pilot on WhatsApp
+        </a>
+        <a className="btn btn-quiet" href="tel:+96897312049">Call +968 9731 2049</a>
+      </div>
+    </section>
+  )
+}
+
+const RESULTS = [
+  { status: 'replied', label: 'They replied' },
+  { status: 'meeting', label: 'Meeting booked' },
+  { status: 'won', label: 'Won' },
+  { status: 'lost', label: 'Not interested' },
+]
+
+function ResultButtons({ lead }) {
+  const [pick, setPick] = useState(null)
+  const [note, setNote] = useState('')
+  const [msg, setMsg] = useState('')
+  const [pending, startTransition] = useTransition()
+  const contacted = CONTACTED.includes(lead.status)
+
+  function save() {
+    setMsg('')
+    startTransition(async () => {
+      const res = await setResult({ id: lead.id, status: pick, note })
+      if (res?.error) setMsg(res.error)
+      else { setMsg('Saved'); setPick(null); setNote('') }
+    })
+  }
+
+  return (
+    <section className="drawer-section">
+      <h3>What happened?</h3>
+      {!contacted && <p className="muted small">Use these after the message is sent.</p>}
+      <div className="result-row">
+        {RESULTS.map((r) => (
+          <button key={r.status} type="button"
+            className={pick === r.status ? 'btn btn-primary' : lead.status === r.status ? 'btn btn-quiet is-current' : 'btn btn-plain'}
+            onClick={() => { setPick(r.status); setMsg('') }} disabled={pending}>
+            {r.label}
+          </button>
+        ))}
+      </div>
+      {pick && (
+        <div className="edit">
+          <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} maxLength={300}
+            placeholder={pick === 'meeting' ? 'When, e.g. Tuesday 11am at their office' : 'Short note (optional)'} aria-label="Note" />
+          <div className="edit-actions">
+            <button className="btn btn-primary" onClick={save} disabled={pending}>{pending ? 'Saving...' : 'Save'}</button>
+            <button className="btn btn-plain" onClick={() => setPick(null)} disabled={pending}>Cancel</button>
+          </div>
+        </div>
+      )}
+      {pick === 'lost' && <p className="muted small">If they asked you to stop contacting them, use "Do not contact" below instead.</p>}
+      {msg && <p className={msg === 'Saved' ? 'ok' : 'error'} role="status">{msg}</p>}
+    </section>
+  )
+}
+
+function DraftForm({ lead }) {
+  const hasPhone = Boolean(lead.whatsapp || lead.phone)
+  const [open, setOpen] = useState(false)
+  const [channel, setChannel] = useState(lead.email ? 'email' : hasPhone ? 'whatsapp' : 'email')
+  const [language, setLanguage] = useState('en')
+  const [subject, setSubject] = useState('')
+  const [message, setMessage] = useState('')
+  const [msg, setMsg] = useState('')
+  const [pending, startTransition] = useTransition()
+
+  function save() {
+    setMsg('')
+    startTransition(async () => {
+      const res = await addDraft({ leadId: lead.id, channel, language, subject, message })
+      if (res?.error) setMsg(res.error)
+      else { setMsg('Draft saved. It is waiting for approval.'); setMessage(''); setSubject(''); setOpen(false) }
+    })
+  }
+
+  return (
+    <section className="drawer-section">
+      <h3>Write a message</h3>
+      {!open ? (
+        <>
+          <button className="btn btn-quiet" onClick={() => { setOpen(true); setMsg('') }}>+ New draft</button>
+          {msg && <p className="ok" role="status">{msg}</p>}
+        </>
+      ) : (
+        <div className="edit">
+          <div className="inline-fields">
+            <select value={channel} onChange={(e) => setChannel(e.target.value)} aria-label="Channel">
+              <option value="email">Email</option>
+              <option value="whatsapp">WhatsApp</option>
+            </select>
+            <select value={language} onChange={(e) => setLanguage(e.target.value)} aria-label="Language">
+              <option value="en">English</option>
+              <option value="ar">Arabic</option>
+              <option value="ur">Urdu</option>
+            </select>
+          </div>
+          {channel === 'email' && (
+            <input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Subject" aria-label="Subject" maxLength={200} />
+          )}
+          <textarea rows={7} value={message} onChange={(e) => setMessage(e.target.value)} aria-label="Message"
+            dir={RTL.includes(language) ? 'rtl' : undefined} placeholder="Good day. I'm Kamran Zia Siddiquee, owner of KS TECH LLC..." />
+          {channel === 'email' && !lead.email && <p className="muted small">This lead has no email address yet. Add it before sending.</p>}
+          {channel === 'whatsapp' && !hasPhone && <p className="muted small">This lead has no phone number yet.</p>}
+          <div className="edit-actions">
+            <button className="btn btn-primary" onClick={save} disabled={pending || !message.trim()}>
+              {pending ? 'Saving...' : 'Save draft for approval'}
+            </button>
+            <button className="btn btn-plain" onClick={() => setOpen(false)} disabled={pending}>Cancel</button>
+          </div>
+          {msg && <p className="error" role="alert">{msg}</p>}
+        </div>
+      )}
+    </section>
+  )
+}
+
+const LEAD_FIELDS = [
+  ['business_name', 'Business name *', 'text'],
+  ['category', 'Type, e.g. restaurant, clinic', 'text'],
+  ['area', 'Area, e.g. Al Khuwair', 'text'],
+  ['phone', 'Phone', 'tel'],
+  ['email', 'Email', 'email'],
+  ['website', 'Website', 'url'],
+  ['google_maps_url', 'Google Maps link', 'url'],
+]
+
+function AddLeadForm({ clientId, service, onDone, onOpenLead }) {
+  const [f, setF] = useState({ source: 'google_maps', score: '7' })
+  const [matches, setMatches] = useState(null)
+  const [error, setError] = useState('')
+  const [pending, startTransition] = useTransition()
+  const set = (k) => (e) => { setF({ ...f, [k]: e.target.value }); setMatches(null) }
+
+  function submit(force) {
+    setError('')
+    startTransition(async () => {
+      if (!force) {
+        const chk = await checkDuplicates({ clientId, name: f.business_name, phone: f.phone, email: f.email })
+        if (chk?.matches?.length) { setMatches(chk.matches); return }
+      }
+      const res = await addLead({ ...f, clientId, service })
+      if (res?.error) { setError(res.error); return }
+      onDone(res.lead?.id)
+    })
+  }
+
+  return (
+    <div className="add-lead">
+      <div className="panel-head">
+        <h3>New lead: {DEMO_TYPE_LABEL[service]}</h3>
+        <button className="btn btn-plain" onClick={() => onDone(null)} disabled={pending}>Cancel</button>
+      </div>
+      <div className="add-grid">
+        {LEAD_FIELDS.map(([k, label, type]) => (
+          <label key={k}>
+            <span>{label}</span>
+            <input type={type} value={f[k] || ''} onChange={set(k)} required={k === 'business_name'} />
+          </label>
+        ))}
+        <label>
+          <span>Found via</span>
+          <select value={f.source} onChange={set('source')}>
+            <option value="google_maps">Google Maps and reviews</option>
+            <option value="instagram">Instagram</option>
+            <option value="website">Their website</option>
+            <option value="visit">In-person visit</option>
+            <option value="referral">Referral</option>
+          </select>
+        </label>
+        <label>
+          <span>Match score (1 to 10)</span>
+          <input type="number" min={1} max={10} value={f.score || ''} onChange={set('score')} />
+        </label>
+      </div>
+      <div className="add-grid add-wide">
+        <label><span>Problem spotted</span><input value={f.problem_found || ''} onChange={set('problem_found')} placeholder="e.g. Customers complain they cannot book online" /></label>
+        <label><span>Evidence</span><input value={f.problem_evidence || ''} onChange={set('problem_evidence')} placeholder="e.g. 4 Google reviews mention no reply on WhatsApp" /></label>
+        <label><span>What we offer them</span><input value={f.suggested_service || ''} onChange={set('suggested_service')} /></label>
+        <label><span>Why this lead (shown to the client)</span><textarea rows={2} value={f.why_chosen || ''} onChange={set('why_chosen')} /></label>
+      </div>
+
+      {matches && (
+        <div className="dup-note" role="alert">
+          <p><strong>This may already be in your leads:</strong></p>
+          <ul className="plain-list">
+            {matches.map((m) => (
+              <li key={m.id}>
+                <button className="link-btn" onClick={() => onOpenLead(m.id)}>{m.ref_code}, {m.business_name}</button>
+                {' '}<span className="sub">(same {m.matched_on}{m.do_not_contact ? ', on do-not-contact list' : ''})</span>
+              </li>
+            ))}
+          </ul>
+          <button className="btn btn-plain" onClick={() => submit(true)} disabled={pending}>It is a different business, add anyway</button>
+        </div>
+      )}
+      {error && <p className="error" role="alert">{error}</p>}
+      {!matches && (
+        <div className="edit-actions">
+          <button className="btn btn-primary" onClick={() => submit(false)} disabled={pending || !f.business_name?.trim()}>
+            {pending ? 'Checking...' : 'Add lead'}
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function LiveResults({ live, isDemo, service, clientId, onRetry, onClear, onSaved }) {
+  const [all, setAll] = useState(false)
+  const [picked, setPicked] = useState({})
+  const [withDrafts, setWithDrafts] = useState(true)
+  const [msg, setMsg] = useState('')
+  const [pending, startTransition] = useTransition()
+  const items = all ? live.items : live.items.slice(0, 8)
+  const pickedList = live.items.filter((b) => picked[b.id])
+
+  // new results: pre-tick the strong matches
+  useEffect(() => {
+    const p = {}
+    for (const b of live.items) if (b.score >= 8) p[b.id] = true
+    setPicked(p)
+    setMsg('')
+  }, [live.items])
+
+  function save() {
+    setMsg('')
+    startTransition(async () => {
+      const res = await addFoundLeads({ clientId, service, items: pickedList, withDrafts, searchedNear: live.near || live.where })
+      if (res?.error) { setMsg(res.error); return }
+      setMsg(`Saved ${res.added} lead${res.added === 1 ? '' : 's'}${res.drafts ? ` and ${res.drafts} draft${res.drafts === 1 ? '' : 's'} for approval` : ''}${res.dup ? `. ${res.dup} look like duplicates, check the tags` : ''}.`)
+      setPicked({})
+      onSaved()
+    })
+  }
+
+  const title = live.status === 'noplace' ? `"${live.where}" not found`
+    : `Real ${live.label || 'businesses'} near ${live.where}`
+
+  return (
+    <section className="panel live-results" aria-label="Live search results">
+      <div className="panel-head">
+        <h2>
+          <span className="live-pill"><span className="live-pill-dot" aria-hidden="true" />Live</span>{' '}
+          {title}
+        </h2>
+        <span className="inline-fields">
+          <button className="btn btn-plain" onClick={onRetry} disabled={live.status === 'loading'}>
+            {live.status === 'loading' ? 'Searching...' : 'Search again'}
+          </button>
+          {!isDemo && <button className="btn btn-plain" onClick={onClear} disabled={live.status === 'loading'}>Close</button>}
+        </span>
+      </div>
+      <p className="muted small">
+        Found right now from public map listings{live.km ? ` up to ${live.km} km` : ' within about 2 km'}.{' '}
+        {isDemo
+          ? 'Shown for this demo only, nothing is saved. The 6 leads below are worked examples of what the agent does next.'
+          : 'Tick the ones you want and save them as leads. Nothing is saved until you do.'}
+      </p>
+
+      {live.status === 'loading' && <p className="empty">Finding the place and searching map listings...</p>}
+      {live.status === 'noplace' && (
+        <p className="error">The map does not know that place name. Check the spelling, e.g. Al Khuwair, Qurum, Ghubrah, Bousher, Ruwi, Seeb, Al Mawaleh.</p>
+      )}
+      {live.status === 'error' && <p className="error">The live map search is busy right now. Try "Search again" in a moment.</p>}
+      {live.status === 'done' && live.items.length === 0 && (
+        <p className="empty">No listed {live.label || 'businesses'} found here. Try a bigger distance, e.g. +20 km.</p>
+      )}
+
+      {live.items.length > 0 && (
+        <>
+          <ul className="live-list">
+            {items.map((b) => (
+              <li key={b.id} className={picked[b.id] ? 'live-item live-picked' : 'live-item'}>
+                {!isDemo && (
+                  <input type="checkbox" className="live-check" checked={Boolean(picked[b.id])}
+                    onChange={(e) => setPicked({ ...picked, [b.id]: e.target.checked })} aria-label={`Select ${b.name}`} />
+                )}
+                <div className="live-main">
+                  <a className="biz" href={b.mapUrl} target="_blank" rel="noreferrer">{b.name}</a>
+                  <span className="sub">{b.type}{b.area ? `, ${b.area}` : ''}, {b.km < 1 ? `${Math.round(b.km * 1000)} m` : `${b.km.toFixed(1)} km`} away</span>
+                  {isDemo
+                    ? <span className="live-offer">Fit: {b.offer}</span>
+                    : (b.phone || b.email) && <span className="live-offer">{[b.phone, b.email].filter(Boolean).join(', ')}</span>}
+                  {b.gaps.length > 0 && (
+                    <span className="tags">{b.gaps.map((g) => <span key={g} className="tag tag-due">{g}</span>)}</span>
+                  )}
+                </div>
+                <span className="live-score" title="Match score">{b.score}<span className="sub">/10</span></span>
+              </li>
+            ))}
+          </ul>
+          {live.items.length > 8 && (
+            <button className="link-btn small" onClick={() => setAll(!all)}>
+              {all ? 'Show fewer' : `Show all ${live.items.length}`}
+            </button>
+          )}
+        </>
+      )}
+      {!isDemo && live.items.length > 0 && (
+        <div className="live-save">
+          <label className="mb-check">
+            <input type="checkbox" checked={withDrafts} onChange={(e) => setWithDrafts(e.target.checked)} />
+            <span>Also write a first message for each (WhatsApp if a phone is listed, else email). You approve them before anything is sent.</span>
+          </label>
+          <div className="edit-actions">
+            <button className="btn btn-brass" onClick={save} disabled={pending || pickedList.length === 0}>
+              {pending ? 'Saving...' : `Save ${pickedList.length} as ${DEMO_TYPE_LABEL[service].toLowerCase()} leads`}
+            </button>
+            <button className="link-btn small" onClick={() => {
+              const p = {}; for (const b of live.items) p[b.id] = true; setPicked(p)
+            }}>Select all {live.items.length}</button>
+          </div>
+          {msg && <p className="ok" role="status">{msg}</p>}
+        </div>
+      )}
+      <p className="fine">Map data: OpenStreetMap contributors.</p>
+    </section>
+  )
+}
+
+// Admin: example, one-tap niche searches, and a search for every niche at once
+const NICHE_LIST = [
+  'clinics', 'restaurants', 'cafes', 'gyms', 'schools', 'training centres', 'hotels', 'pharmacies',
+  'car businesses', 'supermarkets', 'bakeries', "men's barbers", 'travel agencies', 'furniture and interiors',
+  'printing and signage', 'real estate offices', 'offices', 'hospitals',
+]
+
+function SearchHelp({ area, km, disabled, onPick }) {
+  const q = (what) => `find ${what} near ${area} +${km} km`
+  return (
+    <div className="search-help">
+      <p className="sub">
+        Example: <button type="button" className="link-btn small" disabled={disabled} onClick={() => onPick(q('clinics'))}>{q('clinics')}</button>
+        {' '}You can also add a cuisine, e.g. "Pakistani restaurants".
+      </p>
+      <div className="niche-row" role="group" aria-label="Search a niche">
+        <button type="button" className="chip chip-all" disabled={disabled} onClick={() => onPick(q('everything'))}>
+          Auto search: all niches
+        </button>
+        {NICHE_LIST.map((n) => (
+          <button key={n} type="button" className="chip" disabled={disabled} onClick={() => onPick(q(n))}>{n}</button>
+        ))}
+      </div>
+      <p className="sub">Tap a niche to search it near {area} (+{km} km). Change the distance above, or type your own place.</p>
+    </div>
+  )
+}
+
+function ServiceTabs({ services, current, counts, onPick }) {
+  return (
+    <nav className="svc-tabs" aria-label="Service">
+      {services.map((s) => (
+        <button key={s} type="button" className={s === current ? 'svc-tab svc-on' : 'svc-tab'}
+          aria-pressed={s === current} onClick={() => onPick(s)}>
+          {DEMO_TYPE_LABEL[s]}
+          <span className="svc-count">{counts[s] || 0}</span>
+        </button>
+      ))}
+    </nav>
   )
 }
 
@@ -1797,8 +2376,11 @@ function MailboxPanel({ clientId, mailbox, isAdmin, isDemo }) {
 
 function EmailScreen({ mode, lead, leadOutreach, drafts, leadById, isDemo, demoStep, clientId, kind, onClose, onRefresh }) {
   const FROM_DEMO = DEMO_FROM[kind] || DEMO_FROM.leadgen
-  const leadDraft = leadOutreach.find((o) => o.status === 'draft')
+  const leadDrafts = leadOutreach.filter((o) => o.status === 'draft')
+  const [lang, setLang] = useState(leadDrafts.find((o) => (o.language || 'en') === 'en') ? 'en' : leadDrafts[0]?.language || 'en')
+  const leadDraft = leadDrafts.find((o) => (o.language || 'en') === lang) || leadDrafts[0]
   const history = leadOutreach.filter((o) => o.status !== 'draft')
+  const allDrafts = onePerLead(drafts)
   const [view, setView] = useState(mode === 'all' ? 'all' : 'single')
   const [editing, setEditing] = useState(false)
   const [subject, setSubject] = useState(leadDraft?.subject || '')
@@ -1881,7 +2463,7 @@ function EmailScreen({ mode, lead, leadOutreach, drafts, leadById, isDemo, demoS
       <div className="mail" role="dialog" aria-modal="true" aria-label="Email" onClick={(e) => e.stopPropagation()}>
         <div className="mail-head">
           <h2>
-            {view === 'all' ? `Approve all emails (${drafts.length})`
+            {view === 'all' ? `Approve all messages (${allDrafts.length})`
               : view === 'sending' ? (isDemo ? 'Sending' : 'Approving')
               : view === 'done' ? 'Done'
               : `Email to ${lead?.business_name}`}
@@ -1897,8 +2479,23 @@ function EmailScreen({ mode, lead, leadOutreach, drafts, leadById, isDemo, demoS
                   <p className="badge-wait">Waiting for your approval</p>
                   <WhyLead lead={lead} compact />
                 </div>
+                {leadDrafts.length > 1 && (
+                  <div className="lang-switch" role="group" aria-label="Message language">
+                    {leadDrafts.map((d) => {
+                      const l = d.language || 'en'
+                      return (
+                        <button key={d.id} type="button" className={l === (leadDraft.language || 'en') ? 'btn btn-primary' : 'btn btn-plain'}
+                          disabled={busy || editing}
+                          onClick={() => { setLang(l); setSubject(d.subject || ''); setBody(d.message_draft || '') }}>
+                          {LANG_LABEL[l] || l}
+                        </button>
+                      )
+                    })}
+                    <span className="sub">Approve one version; the other is cancelled.</span>
+                  </div>
+                )}
                 <dl className="mail-fields">
-                  <dt>From</dt><dd>{isDemo ? FROM_DEMO : 'Your company email'}</dd>
+                  <dt>From</dt><dd>{isDemo ? FROM_DEMO : leadDraft.channel === 'whatsapp' ? 'Your WhatsApp' : 'Your company email'}</dd>
                   <dt>To</dt><dd>{lead.email || lead.business_name}</dd>
                   <dt>Subject</dt>
                   <dd>
@@ -1908,8 +2505,8 @@ function EmailScreen({ mode, lead, leadOutreach, drafts, leadById, isDemo, demoS
                   </dd>
                 </dl>
                 {editing
-                  ? <textarea rows={10} value={body} onChange={(e) => setBody(e.target.value)} aria-label="Message" />
-                  : <p className="mail-text">{body}</p>}
+                  ? <textarea rows={10} value={body} onChange={(e) => setBody(e.target.value)} aria-label="Message" dir={RTL.includes(leadDraft.language) ? 'rtl' : undefined} />
+                  : <p className="mail-text" dir={RTL.includes(leadDraft.language) ? 'rtl' : undefined}>{body}</p>}
                 {error && <p className="error">{error}</p>}
                 <div className="mail-actions">
                   <button className="btn btn-brass btn-lg" disabled={busy}
@@ -1919,9 +2516,9 @@ function EmailScreen({ mode, lead, leadOutreach, drafts, leadById, isDemo, demoS
                   {!editing && <button className="btn btn-quiet" onClick={() => setEditing(true)} disabled={busy}>Edit</button>}
                   {editing && <button className="btn btn-plain" onClick={() => { setEditing(false); setSubject(leadDraft.subject || ''); setBody(leadDraft.message_draft || '') }}>Cancel edit</button>}
                   <button className="btn btn-plain" onClick={reject} disabled={busy}>Reject</button>
-                  {drafts.length > 1 && (
+                  {allDrafts.length > 1 && (
                     <button className="link-btn small push-right" onClick={() => setView('all')} disabled={busy}>
-                      Approve all ({drafts.length})
+                      Approve all ({allDrafts.length})
                     </button>
                   )}
                 </div>
@@ -1957,9 +2554,9 @@ function EmailScreen({ mode, lead, leadOutreach, drafts, leadById, isDemo, demoS
 
         {view === 'all' && (
           <div className="mail-body">
-            <p className="muted">Read through the emails, then approve them together.</p>
+            <p className="muted">Read through the messages, then approve them together.{allDrafts.length < drafts.length ? ' Where a lead has two languages, the English version is used.' : ''}</p>
             <ul className="mail-list">
-              {drafts.map((o) => (
+              {allDrafts.map((o) => (
                 <li key={o.id}>
                   <details>
                     <summary>
@@ -1973,8 +2570,8 @@ function EmailScreen({ mode, lead, leadOutreach, drafts, leadById, isDemo, demoS
             </ul>
             {error && <p className="error">{error}</p>}
             <div className="mail-actions">
-              <button className="btn btn-brass btn-lg" disabled={busy || drafts.length === 0} onClick={() => approveList(drafts, null)}>
-                {isDemo ? `Approve and send all ${drafts.length}` : `Approve all ${drafts.length}`}
+              <button className="btn btn-brass btn-lg" disabled={busy || allDrafts.length === 0} onClick={() => approveList(allDrafts, null)}>
+                {isDemo ? `Approve and send all ${allDrafts.length}` : `Approve all ${allDrafts.length}`}
               </button>
               {lead && <button className="btn btn-plain" onClick={() => setView('single')}>Back</button>}
             </div>
