@@ -811,3 +811,14 @@ textarea { width: 100%; resize: vertical; line-height: 1.6; }
 .chip:disabled { opacity: 0.5; cursor: default; }
 .chip-all { text-transform: none; font-weight: 700; color: var(--bg); background: var(--gold); border-color: var(--gold); }
 .chip-all:hover:not(:disabled) { color: var(--bg); background: var(--gold-bright); }
+
+/* Niche dropdown, own niches, picked chips */
+.niche-pick { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.niche-select select { min-width: 220px; text-transform: none; }
+.niche-own { display: flex; gap: 0.4rem; align-items: center; }
+.niche-own input { width: 200px; }
+.chip-on { display: inline-flex; align-items: center; gap: 0.35rem; color: var(--gold-bright); border-color: var(--gold); background: var(--gold-soft); cursor: default; }
+.chip-x { font: inherit; font-size: 1rem; line-height: 1; background: none; border: 0; color: inherit; cursor: pointer; padding: 0 0.1rem; }
+.niche-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; }
+.push-right { margin-left: auto; }
+@media (max-width: 720px) { .niche-select select, .niche-own input { min-width: 0; width: 100%; } .niche-own { width: 100%; } .niche-own input { flex: 1; } }

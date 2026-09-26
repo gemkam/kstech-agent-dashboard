@@ -275,7 +275,7 @@ export default function Dashboard({
   const [radiusNote, setRadiusNote] = useState('')
   const [adding, setAdding] = useState(false)
   const [live, setLive] = useState({ status: 'idle', items: [], where: '' }) // live map search results
-  const lastSearch = useRef('')
+  const lastSearch = useRef(null)
 
   const isDemo = client.is_demo
   const kind = client.demo_kind || 'leadgen'
@@ -302,7 +302,8 @@ export default function Dashboard({
   const show = (minStep) => !isDemo || demoStep >= minStep
 
   const liveRunning = latestRun?.status === 'running'
-  const running = Boolean(anim) || liveRunning
+  const [searchStep, setSearchStep] = useState(null) // text shown while a live map search runs
+  const running = Boolean(anim) || liveRunning || Boolean(searchStep)
 
   // Refresh every 15 s while a real run is live, so clients see progress
   useEffect(() => {
@@ -372,13 +373,15 @@ export default function Dashboard({
 
   // Real search of public map listings (OpenStreetMap). Demo: shown only. Admin: pick results to save as leads.
   // text: optional, e.g. "find clinics near Al Khuwair +10 km". here: a known point (demo location).
-  async function runLiveSearch(here, km, text = '') {
+  async function runLiveSearch(here, km, text = '', preset = null) {
     const lib = await import('@/lib/liveSearch')
     const q = lib.parseQuery(text)
+    if (preset) Object.assign(q, lib.presetFor(preset.labels, preset.custom), { everything: false, cuisine: null })
     const dist = q.km ?? km ?? 0
     if (q.km != null && RADIUS_OPTIONS.includes(q.km)) setRadius(q.km)
     setLive({ status: 'loading', items: [], where: q.place || here?.label || client.base_area || 'your area', label: q.label, km: dist })
 
+    setSearchStep(q.place ? `Finding ${q.place} on the map` : 'Finding your area on the map')
     let runId = null
     const realRun = isAdmin && !isDemo
     if (realRun) {
@@ -397,6 +400,7 @@ export default function Dashboard({
         if (!point) {
           setLive({ status: 'noplace', items: [], where: q.place, label: q.label, km: dist })
           await finish(`Place "${q.place}" not found on the map`)
+          setSearchStep(null)
           return 0
         }
       } else if (here?.lat != null) {
@@ -412,13 +416,22 @@ export default function Dashboard({
       if (fallback) point = { lat: 23.5880, lon: 58.4060, label: 'Al Khuwair, Muscat' }
       const where = fallback ? 'Al Khuwair, Muscat (location not shared)' : point.label
 
-      const items = await lib.searchNearby({ lat: point.lat, lon: point.lon, km: dist, sel: q.sel, cuisine: q.cuisine, max: q.everything ? 120 : 60 })
-      setLive({ status: 'done', items, where, label: q.label, km: dist, near: point.label })
+      setSearchStep(`Searching ${q.label} near ${point.label}${dist ? ` (+${dist} km)` : ''}`)
+      const items = await lib.searchNearby({
+        lat: point.lat, lon: point.lon, km: dist, sel: q.sel, cuisine: q.cuisine, max: q.everything ? 120 : 60, custom: q.custom || [],
+        onProgress: (done, total) => {
+          if (total > 1 && done < total) setSearchStep(`Searching ${q.label} near ${point.label}: part ${done + 1} of ${total}`)
+        },
+      })
+      setSearchStep(`Found ${items.length} ${q.label}, sorting best matches first`)
+      setLive({ status: 'done', items, where, label: q.label, km: dist, near: point.label, partial: items.partial })
       await finish(`Found ${items.length} ${q.label} near ${point.label}${dist ? ` (+${dist} km)` : ''}`)
+      setSearchStep(null)
       return items.length
-    } catch {
-      setLive((l) => ({ ...l, status: 'error', items: [] }))
-      await finish('Search stopped: the map service was busy')
+    } catch (e) {
+      setLive((l) => ({ ...l, status: 'error', items: [], detail: String(e?.message || '').slice(0, 160) }))
+      await finish('Search stopped: the map service did not answer')
+      setSearchStep(null)
       return 0
     }
   }
@@ -586,7 +599,7 @@ export default function Dashboard({
           service={isDemo ? kind : service}
           isAdmin={isAdmin}
           running={running}
-          step={anim ? anim.steps[anim.i] : latestRun?.current_step}
+          step={anim ? anim.steps[anim.i] : searchStep || latestRun?.current_step}
           progress={anim ? (anim.i + 1) / anim.steps.length : null}
           latestRun={latestRun}
           place={isDemo ? place : null}
@@ -597,7 +610,7 @@ export default function Dashboard({
           isDemo={isDemo}
           canSearch={(isAdmin && !isDemo) || (isDemo && kind === 'leadgen' && demoStep >= 2)}
           searching={live.status === 'loading'}
-          onSearch={(text) => { lastSearch.current = text; return runLiveSearch(place, radius, text) }}
+          onSearch={(text, preset) => { lastSearch.current = { text, preset }; return runLiveSearch(place, radius, text, preset) }}
           calm={!isDemo}
           focus={focusOn('sec-agent')}
         />
@@ -643,7 +656,7 @@ export default function Dashboard({
 
         {((isDemo && kind === 'leadgen' && show(2)) || (!isDemo && isAdmin)) && live.status !== 'idle' && (
           <LiveResults live={live} isDemo={isDemo} service={service} clientId={client.id}
-            onRetry={() => runLiveSearch(place, radius, lastSearch.current)}
+            onRetry={() => runLiveSearch(place, radius, lastSearch.current?.text || '', lastSearch.current?.preset || null)}
             onClear={() => setLive({ status: 'idle', items: [], where: '' })}
             onSaved={() => router.refresh()} />
         )}
@@ -1388,6 +1401,7 @@ function AgentBar({ client, service, isAdmin, isDemo, canSearch, searching, onSe
           km={radius || 10}
           disabled={pending || searching}
           onPick={(q) => { setText(q); setError(''); startTransition(async () => { await onSearch(q) }) }}
+          onPreset={(labels, custom, textLine) => { setText(textLine); setError(''); startTransition(async () => { await onSearch(textLine, { labels, custom }) }) }}
         />
       )}
     </section>
@@ -2069,7 +2083,13 @@ function LiveResults({ live, isDemo, service, clientId, onRetry, onClear, onSave
       {live.status === 'noplace' && (
         <p className="error">The map does not know that place name. Check the spelling, e.g. Al Khuwair, Qurum, Ghubrah, Bousher, Ruwi, Seeb, Al Mawaleh.</p>
       )}
-      {live.status === 'error' && <p className="error">The live map search is busy right now. Try "Search again" in a moment.</p>}
+      {live.status === 'error' && (
+        <p className="error">
+          The free map service did not answer. Wait about 30 seconds, then press "Search again".
+          {live.detail && <span className="sub"> Details: {live.detail}</span>}
+        </p>
+      )}
+      {live.status === 'done' && live.partial && <p className="muted small">Part of the search timed out, so a few niches may be missing. Search again to fill them in.</p>}
       {live.status === 'done' && live.items.length === 0 && (
         <p className="empty">No listed {live.label || 'businesses'} found here. Try a bigger distance, e.g. +20 km.</p>
       )}
@@ -2133,23 +2153,102 @@ const NICHE_LIST = [
   'printing and signage', 'real estate offices', 'offices', 'hospitals',
 ]
 
-function SearchHelp({ area, km, disabled, onPick }) {
+const MAX_NICHES = 4
+const CUSTOM_KEY = 'ks-custom-niches'
+
+function SearchHelp({ area, km, disabled, onPick, onPreset }) {
   const q = (what) => `find ${what} near ${area} +${km} km`
+  const [custom, setCustom] = useState([]) // niches the admin added, remembered on this device
+  const [picked, setPicked] = useState([])
+  const [choice, setChoice] = useState('')
+  const [newNiche, setNewNiche] = useState('')
+  const [note, setNote] = useState('')
+
+  useEffect(() => {
+    try { setCustom(JSON.parse(localStorage.getItem(CUSTOM_KEY) || '[]')) } catch {}
+  }, [])
+  function saveCustom(list) {
+    setCustom(list)
+    try { localStorage.setItem(CUSTOM_KEY, JSON.stringify(list)) } catch {}
+  }
+
+  function add(n) {
+    setNote('')
+    if (!n || picked.includes(n)) return
+    if (picked.length >= MAX_NICHES) { setNote(`Up to ${MAX_NICHES} niches at a time.`); return }
+    setPicked([...picked, n])
+    setChoice('')
+  }
+  function addOwn(e) {
+    e.preventDefault()
+    const n = newNiche.trim().toLowerCase().slice(0, 30)
+    if (!n) return
+    if (!NICHE_LIST.includes(n) && !custom.includes(n)) saveCustom([...custom, n])
+    setNewNiche('')
+    add(n)
+  }
+  function search() {
+    if (!picked.length) { setNote('Pick at least one niche from the list.'); return }
+    const labels = picked.filter((n) => NICHE_LIST.includes(n))
+    const own = picked.filter((n) => !NICHE_LIST.includes(n))
+    onPreset(labels, own, q(picked.join(', ')))
+  }
+
   return (
     <div className="search-help">
       <p className="sub">
         Example: <button type="button" className="link-btn small" disabled={disabled} onClick={() => onPick(q('clinics'))}>{q('clinics')}</button>
-        {' '}You can also add a cuisine, e.g. "Pakistani restaurants".
+        {' '}You can also type a cuisine, e.g. "Pakistani restaurants".
       </p>
-      <div className="niche-row" role="group" aria-label="Search a niche">
-        <button type="button" className="chip chip-all" disabled={disabled} onClick={() => onPick(q('everything'))}>
-          Auto search: all niches
-        </button>
-        {NICHE_LIST.map((n) => (
-          <button key={n} type="button" className="chip" disabled={disabled} onClick={() => onPick(q(n))}>{n}</button>
-        ))}
+
+      <div className="niche-pick">
+        <label className="niche-select">
+          <span className="sr-only">Niche</span>
+          <select value={choice} disabled={disabled || picked.length >= MAX_NICHES} onChange={(e) => add(e.target.value)}>
+            <option value="">{picked.length >= MAX_NICHES ? `${MAX_NICHES} niches picked` : 'Choose a niche...'}</option>
+            <optgroup label="Niches">
+              {NICHE_LIST.filter((n) => !picked.includes(n)).map((n) => <option key={n} value={n}>{n}</option>)}
+            </optgroup>
+            {custom.filter((n) => !picked.includes(n)).length > 0 && (
+              <optgroup label="Your own niches">
+                {custom.filter((n) => !picked.includes(n)).map((n) => <option key={n} value={n}>{n}</option>)}
+              </optgroup>
+            )}
+          </select>
+        </label>
+        <form className="niche-own" onSubmit={addOwn}>
+          <input value={newNiche} onChange={(e) => setNewNiche(e.target.value)} placeholder="Add your own, e.g. curtains"
+            aria-label="Add your own niche" maxLength={30} disabled={disabled} />
+          <button type="submit" className="btn btn-plain" disabled={disabled || !newNiche.trim()}>+ Add</button>
+        </form>
       </div>
-      <p className="sub">Tap a niche to search it near {area} (+{km} km). Change the distance above, or type your own place.</p>
+
+      {picked.length > 0 && (
+        <div className="niche-row" role="list" aria-label="Picked niches">
+          {picked.map((n) => (
+            <span key={n} className="chip chip-on" role="listitem">
+              {n}
+              <button type="button" className="chip-x" aria-label={`Remove ${n}`} disabled={disabled}
+                onClick={() => { setPicked(picked.filter((x) => x !== n)); setNote('') }}>×</button>
+            </span>
+          ))}
+          <span className="sub">{picked.length} of {MAX_NICHES}</span>
+        </div>
+      )}
+
+      <div className="niche-actions">
+        <button type="button" className="btn btn-brass" disabled={disabled || !picked.length} onClick={search}>
+          {picked.length > 1 ? `Search these ${picked.length} niches` : 'Search this niche'}
+        </button>
+        <span className="sub">near {area} (+{km} km). Change the distance above.</span>
+        {custom.length > 0 && (
+          <button type="button" className="link-btn small push-right" disabled={disabled}
+            onClick={() => { if (confirm('Remove your own niches from this list?')) saveCustom([]) }}>
+            Clear my own niches
+          </button>
+        )}
+      </div>
+      {note && <p className="error">{note}</p>}
     </div>
   )
 }
