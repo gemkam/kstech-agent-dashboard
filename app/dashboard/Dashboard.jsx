@@ -135,8 +135,8 @@ const DEMO_OVERRIDES = {
     4: { title: 'Approved follow-ups are sent', text: 'Follow-ups go out from your own company email, so customers reply straight to you.', button: 'Send approved follow-ups',
          anim: ['Sending approved follow-ups from your company email', 'Scheduling a reminder for each customer'] },
     5: { title: 'Waiting for customers to reply', text: 'The agent tracks who replies. Customers who stay quiet get one more polite reminder after three days.' },
-    6: { title: '2 customers replied', text: 'Replies arrive in your inbox and show here. You confirm the order or book the site visit.' },
-    7: { title: 'One week in: an order confirmed and a site visit booked', text: 'No quote is forgotten any more. Every price you send gets followed up until the customer decides.' },
+    6: { title: '2 customers replied', text: 'Replies arrive in your inbox and show here. You confirm the contract or book the site survey.' },
+    7: { title: 'One week in: a contract confirmed and a site survey booked', text: 'No quote is forgotten any more. Every price you send gets followed up until the customer decides.' },
   },
   booking: {
     1: { title: 'Your enquiries', text: 'The agent reads WhatsApp, Instagram, website forms and missed calls, and finds everyone who asked about an appointment but did not book.', button: 'Start agent',
@@ -162,13 +162,13 @@ function getDemo(kind) {
 
 const STAGE_LABELS = {
   leadgen: ['Businesses found', 'Contacted', 'Replied', 'Meetings', 'Won'],
-  quotes: ['Open quotes', 'Followed up', 'Replied', 'Site visits', 'Orders won'],
+  quotes: ['Open quotes', 'Followed up', 'Replied', 'Site surveys', 'Contracts won'],
   booking: ['Enquiries', 'Invited', 'Replied', 'Booked', 'Attended'],
 }
 
 const DEMO_FROM = {
   leadgen: 'sales@gulffacility.example',
-  quotes: 'sales@crescentsigns.example',
+  quotes: 'sales@muscatlogistics.example',
   booking: 'Clinic WhatsApp +968 9000 0200',
 }
 
@@ -1167,10 +1167,10 @@ const PROFILE = {
     ['Per week', 'Up to 30 new businesses, emails only after your approval'],
   ],
   quotes: [
-    ['Services', 'Shop signs, vehicle branding, menu boards, exhibition printing'],
+    ['Services', 'Trucks and trailers, warehousing, equipment hire, manpower supply'],
     ['What the agent does', 'Tracks every quote request and follows up when a customer goes quiet'],
     ['Reads from', 'Enquiry email inbox, WhatsApp, your quote list'],
-    ['Sends from', 'sales@crescentsigns.example'],
+    ['Sends from', 'sales@muscatlogistics.example'],
     ['Per week', 'Every open quote checked, follow-ups only after your approval'],
   ],
   booking: [
