@@ -25,8 +25,8 @@ export default async function DashboardPage({ searchParams }) {
   let client = null
 
   if (isAdmin) {
-    const { data } = await supabase.from('clients').select('id, name, slug, is_demo, demo_kind, description, search_radius_km, services, base_area').order('name')
-    clients = data || []
+    const { data } = await supabase.from('clients').select('id, name, slug, is_demo, demo_kind, description, search_radius_km, services, base_area, share_demo').order('name')
+    clients = (data || []).filter((c) => !c.share_demo)
     client =
       clients.find((c) => c.slug === searchParams?.client) ||
       clients.find((c) => c.slug === 'kstech') ||
@@ -34,7 +34,7 @@ export default async function DashboardPage({ searchParams }) {
   } else if (profile.client_id) {
     const { data } = await supabase
       .from('clients')
-      .select('id, name, slug, is_demo, demo_kind, description, search_radius_km, services, base_area')
+      .select('id, name, slug, is_demo, demo_kind, description, search_radius_km, services, base_area, share_demo')
       .eq('id', profile.client_id)
       .single()
     client = data
@@ -96,8 +96,8 @@ export default async function DashboardPage({ searchParams }) {
 
   // Demo login: list the demo companies so the presenter can switch between them
   let demoClients = []
-  if (!isAdmin && client.is_demo) {
-    const { data } = await supabase.from('clients').select('id, name, slug, demo_kind').eq('is_demo', true).order('name')
+  if (!isAdmin && client.is_demo && !client.share_demo) {
+    const { data } = await supabase.from('clients').select('id, name, slug, demo_kind').eq('is_demo', true).eq('share_demo', false).order('name')
     demoClients = data || []
   }
 

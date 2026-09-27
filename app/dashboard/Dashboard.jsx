@@ -1775,22 +1775,34 @@ function LeadPanel({ lead, isAdmin, outreach, followups, dupOf, onOpenLead, visi
   )
 }
 
-// Pilot and package prices shown at the end of the demo. Change the numbers here.
-const PLANS = [
-  { name: 'Starter', price: 'from 60 OMR', per: 'per month', points: ['1 service', 'Up to 40 businesses or enquiries a month', 'You approve every message', 'Monthly PDF report'] },
-  { name: 'Growth', price: 'from 120 OMR', per: 'per month', featured: true, points: ['2 services', 'Up to 100 businesses or enquiries a month', 'Follow-ups handled for you', 'Weekly results'] },
-  { name: 'Pro', price: 'from 200 OMR', per: 'per month', points: ['All 3 services', 'Up to 200 businesses or enquiries a month', 'English, Arabic and Urdu messages', 'Priority support'] },
-]
-const PILOT_TEXT = 'Good day Kamran, I saw the KS Tech agent demo and would like to start a pilot.'
+// Pilot and package prices shown at the end of each demo. Change the numbers here.
+const PLANS = {
+  leadgen: [
+    { name: 'Starter', price: 'from 60 OMR', per: 'per month', points: ['Up to 40 new businesses a month', 'A personal first email for each one', 'You approve and send from your own email', 'Monthly PDF report'] },
+    { name: 'Growth', price: 'from 150 OMR', per: 'per month', featured: true, points: ['Up to 100 new businesses a month', 'Emails and follow-ups written for you', 'Reply tracking and reminders', 'Weekly results'] },
+    { name: 'Pro', price: 'from 240 OMR', per: 'per month', points: ['Up to 200 new businesses a month', 'Sending done for you from your company mailbox', 'English, Arabic and Urdu messages', 'Priority support'] },
+  ],
+  quotes: [
+    { name: 'Starter', price: 'from 80 OMR', per: 'per month', points: ['Up to 30 open quotes tracked a month', 'One polite follow-up for each quiet quote', 'You approve and send from your own email', 'Monthly PDF report'] },
+    { name: 'Growth', price: 'from 100 OMR', per: 'per month', featured: true, points: ['Up to 80 open quotes tracked a month', 'Two follow-ups per quote until they decide', 'Serious buyers marked apart from price checkers', 'Weekly results'] },
+    { name: 'Pro', price: 'from 120 OMR', per: 'per month', points: ['Up to 200 open quotes tracked a month', 'Email and WhatsApp follow-ups', 'English and Arabic messages', 'Priority support'] },
+  ],
+  booking: [
+    { name: 'Starter', price: 'from 60 OMR', per: 'per month', points: ['Up to 40 enquiries a month', 'A booking invitation with two free times', 'You approve and send from your own WhatsApp', 'Monthly PDF report'] },
+    { name: 'Growth', price: 'from 80 OMR', per: 'per month', featured: true, points: ['Up to 100 enquiries a month', 'A reminder for everyone who stays quiet', 'Booked and attended tracking', 'Weekly results'] },
+    { name: 'Pro', price: 'from 100 OMR', per: 'per month', points: ['Up to 250 enquiries a month', 'WhatsApp, Instagram and website enquiries', 'English and Arabic messages', 'Priority support'] },
+  ],
+}
+const PILOT_TEXT = (kind) => `Good day Kamran, I saw the KS Tech ${DEMO_TYPE_LABEL[kind] || 'agent'} demo and would like to start a pilot.`
 
 function DemoPrices({ kind }) {
   return (
     <section className="panel prices" aria-label="Packages">
       <p className="guide-kicker">Ready to start?</p>
-      <h2>Start with a one-month pilot</h2>
+      <h2>{DEMO_TYPE_LABEL[kind] || 'Agent'} packages: start with a one-month pilot</h2>
       <p className="muted">Setup from 30 OMR, 3-month minimum after the pilot. We guarantee the work gets done every week; the sales are yours to close.</p>
       <div className="plan-grid">
-        {PLANS.map((p) => (
+        {(PLANS[kind] || PLANS.leadgen).map((p) => (
           <div key={p.name} className={p.featured ? 'plan plan-featured' : 'plan'}>
             {p.featured && <span className="plan-badge">Most chosen</span>}
             <h3>{p.name}</h3>
@@ -1801,7 +1813,7 @@ function DemoPrices({ kind }) {
         ))}
       </div>
       <div className="plan-cta">
-        <a className="btn btn-brass btn-lg" href={`https://wa.me/96897312049?text=${encodeURIComponent(PILOT_TEXT)}`} target="_blank" rel="noreferrer">
+        <a className="btn btn-brass btn-lg" href={`https://wa.me/96897312049?text=${encodeURIComponent(PILOT_TEXT(kind))}`} target="_blank" rel="noreferrer">
           Start a pilot on WhatsApp
         </a>
         <a className="btn btn-quiet" href="tel:+96897312049">Call +968 9731 2049</a>
