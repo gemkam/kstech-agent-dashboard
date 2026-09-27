@@ -4,28 +4,33 @@ import { createClient } from '@/lib/supabase/server'
 export const dynamic = 'force-dynamic'
 
 // Public demo links you can share: /try/quotes, /try/booking, /try/leadgen
-// Each link signs the visitor into its own share demo, separate from the presenter demo login.
-// These are public demo accounts (the links are meant to be shared), limited to the share demo data.
-const SHARE_PASSWORD = process.env.DEMO_SHARE_PASSWORD || 'Ks8T0xm77MjZjt6931XAQLkPPQ'
-const SHARE_USERS = {
-  leadgen: 'share-leadgen@kstech.om',
-  quotes: 'share-quotes@kstech.om',
-  booking: 'share-booking@kstech.om',
-}
+// Every visitor gets their own private copy of the demo, so nobody can restart
+// someone else's demo, and nobody can see real client data.
+const KINDS = ['leadgen', 'quotes', 'booking']
 
 export async function GET(request, { params }) {
   const kind = String(params?.kind || '').toLowerCase()
-  const email = SHARE_USERS[kind]
   const url = new URL(request.url)
-  if (!email) {
+  url.search = ''
+
+  if (!KINDS.includes(kind)) {
     url.pathname = '/login'
-    url.search = ''
     return NextResponse.redirect(url)
   }
+
   const supabase = createClient()
   await supabase.auth.signOut()
-  const { error } = await supabase.auth.signInWithPassword({ email, password: SHARE_PASSWORD })
-  url.pathname = error ? '/login' : '/dashboard'
-  url.search = ''
+
+  const { data: visitor, error } = await supabase.rpc('new_share_visitor', { p_kind: kind })
+  if (error || !visitor?.email) {
+    url.pathname = '/login'
+    return NextResponse.redirect(url)
+  }
+
+  const { error: signInError } = await supabase.auth.signInWithPassword({
+    email: visitor.email,
+    password: visitor.password,
+  })
+  url.pathname = signInError ? '/login' : '/dashboard'
   return NextResponse.redirect(url)
 }
