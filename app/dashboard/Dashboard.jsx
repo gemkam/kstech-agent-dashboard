@@ -1785,12 +1785,12 @@ const PLANS = {
   quotes: [
     { name: 'Starter', price: 'from 80 OMR', per: 'per month', points: ['Up to 30 open quotes tracked a month', 'One polite follow-up for each quiet quote', 'You approve and send from your own email', 'Monthly PDF report'] },
     { name: 'Growth', price: 'from 100 OMR', per: 'per month', featured: true, points: ['Up to 80 open quotes tracked a month', 'Two follow-ups per quote until they decide', 'Serious buyers marked apart from price checkers', 'Weekly results'] },
-    { name: 'Pro', price: 'from 120 OMR', per: 'per month', points: ['Up to 200 open quotes tracked a month', 'Email and WhatsApp follow-ups', 'English and Arabic messages', 'Priority support'] },
+    { name: 'Pro', price: 'from 150 OMR', per: 'per month', points: ['Up to 200 open quotes tracked a month', 'Email and WhatsApp follow-ups', 'English and Arabic messages', 'Priority support'] },
   ],
   booking: [
     { name: 'Starter', price: 'from 60 OMR', per: 'per month', points: ['Up to 40 enquiries a month', 'A booking invitation with two free times', 'You approve and send from your own WhatsApp', 'Monthly PDF report'] },
     { name: 'Growth', price: 'from 80 OMR', per: 'per month', featured: true, points: ['Up to 100 enquiries a month', 'A reminder for everyone who stays quiet', 'Booked and attended tracking', 'Weekly results'] },
-    { name: 'Pro', price: 'from 100 OMR', per: 'per month', points: ['Up to 250 enquiries a month', 'WhatsApp, Instagram and website enquiries', 'English and Arabic messages', 'Priority support'] },
+    { name: 'Pro', price: 'from 130 OMR', per: 'per month', points: ['Up to 250 enquiries a month', 'WhatsApp, Instagram and website enquiries', 'English and Arabic messages', 'Priority support'] },
   ],
 }
 const PILOT_TEXT = (kind) => `Good day Kamran, I saw the KS Tech ${DEMO_TYPE_LABEL[kind] || 'agent'} demo and would like to start a pilot.`
