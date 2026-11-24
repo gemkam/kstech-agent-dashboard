@@ -418,44 +418,63 @@ export default function Dashboard({
       if (fallback) point = { lat: 23.5880, lon: 58.4060, label: 'Al Khuwair, Muscat' }
       const where = fallback ? 'Al Khuwair, Muscat (location not shared)' : point.label
 
-      let items
-      if (q.targets) {
-        // "customers for ...": search each buyer niche in turn and give every lead its reason
-        const seen = new Set()
-        items = []
-        let failed = 0, lastErr = null
-        // two niches at a time, so it is about twice as fast; results appear as each niche finishes
-        let next = 0, done = 0
-        const showStep = (t) => setLive({ status: 'loading', items: [...items], where: q.place || point.label, label: q.label, km: dist,
-          step: `Searching ${t ? t.label : ''} (${done} of ${q.targets.length} niches done)` })
-        const worker = async () => {
-          while (next < q.targets.length && !signal.aborted) {
-            const t = q.targets[next++]
-            showStep(t)
-            try {
-              const found = await lib.searchNearby({ lat: point.lat, lon: point.lon, km: dist, sel: t.sel, max: 300, asType: t.label, signal })
-              for (const b of found) {
-                const key = b.name.toLowerCase()
-                if (seen.has(key)) continue
-                seen.add(key)
-                items.push({ ...b, audienceFor: q.audience, offer: t.why, score: t.score, target: t.label })
-              }
-            } catch (e) { if (signal.aborted) return; failed++; lastErr = e }
-            done++
-            showStep(q.targets[next])
+      // Search at one distance. Returns everything found there.
+      const searchAt = async (dist) => {
+        let items
+        if (q.targets) {
+          // "customers for ...": search each buyer niche in turn and give every lead its reason
+          const seen = new Set()
+          items = []
+          let failed = 0, lastErr = null
+          // two niches at a time, so it is about twice as fast; results appear as each niche finishes
+          let next = 0, done = 0
+          const showStep = (t) => setLive({ status: 'loading', items: [...items], where: q.place || point.label, label: q.label, km: dist,
+            step: `Searching ${t ? t.label : ''} (${done} of ${q.targets.length} niches done)` })
+          const worker = async () => {
+            while (next < q.targets.length && !signal.aborted) {
+              const t = q.targets[next++]
+              showStep(t)
+              try {
+                const found = await lib.searchNearby({ lat: point.lat, lon: point.lon, km: dist, sel: t.sel, max: 300, asType: t.label, signal })
+                for (const b of found) {
+                  const key = b.name.toLowerCase()
+                  if (seen.has(key)) continue
+                  seen.add(key)
+                  items.push({ ...b, audienceFor: q.audience, offer: t.why, score: t.score, target: t.label })
+                }
+              } catch (e) { if (signal.aborted) return; failed++; lastErr = e }
+              done++
+              showStep(q.targets[next])
+            }
           }
+          await Promise.all([worker(), worker()])
+          if (!signal.aborted && failed === q.targets.length) throw lastErr || new Error('Search failed')
+          items.sort((a, b) => b.score - a.score || a.km - b.km)
+          items = items.slice(0, 300)
+        } else {
+          items = await lib.searchNearby({ lat: point.lat, lon: point.lon, km: dist, sel: q.sel, cuisine: q.cuisine, max: 300, signal,
+            onPartial: (part) => setLive((l) => ({ ...l, items: part, step: `${part.length} found so far, still searching` })) })
         }
-        await Promise.all([worker(), worker()])
-        if (!signal.aborted && failed === q.targets.length) throw lastErr || new Error('Search failed')
-        items.sort((a, b) => b.score - a.score || a.km - b.km)
-        items = items.slice(0, 300)
-      } else {
-        items = await lib.searchNearby({ lat: point.lat, lon: point.lon, km: dist, sel: q.sel, cuisine: q.cuisine, max: 300, signal,
-          onPartial: (part) => setLive((l) => ({ ...l, items: part, step: `${part.length} found so far, still searching` })) })
+        return items
       }
+
+      // Bring at least 10 leads: if fewer are found, widen the distance automatically up to 100 km
+      const MIN_LEADS = 10
+      let items = await searchAt(dist)
+      let usedKm = dist
+      // bigger jumps so a quiet niche does not take 12 rounds
+      for (const km of [10, 20, 35, 55, 75, 100].filter((k) => k > dist)) {
+        if (items.length >= MIN_LEADS || signal.aborted) break
+        setLive((l) => ({ ...l, status: 'loading', step: `Only ${items.length} found within ${usedKm} km, widening to ${km} km` }))
+        const more = await searchAt(km)
+        usedKm = km
+        if (more.length >= items.length) items = more
+      }
+      const expanded = usedKm !== dist
+
       const stopped = signal.aborted
-      setLive({ status: 'done', items, where, label: q.label, km: dist, near: point.label, stopped, runId, searchLabel })
-      await finish(`${stopped ? 'Stopped early. ' : ''}Found ${items.length} ${q.label} near ${point.label}${dist ? ` (+${dist} km)` : ''}`)
+      setLive({ status: 'done', items, where, label: q.label, km: usedKm, near: point.label, stopped, runId, searchLabel, expandedFrom: expanded ? dist : null })
+      await finish(`${stopped ? 'Stopped early. ' : ''}Found ${items.length} ${q.label} near ${point.label} (${usedKm} km${expanded ? `, widened from ${dist} km` : ''})`)
       return items.length
     } catch (e) {
       if (signal.aborted) {
@@ -2152,6 +2171,7 @@ function LiveResults({ live, isDemo, service, clientId, onRetry, onStop, clientN
         <p className="error">The map does not know that place name. Check the spelling, e.g. Al Khuwair, Qurum, Ghubrah, Bousher, Ruwi, Seeb, Al Mawaleh.</p>
       )}
       {live.status === 'error' && <p className="error">The live map search is busy right now. Try "Search again" in a moment.{live.reason ? ` (${live.reason})` : ''}</p>}
+      {live.status === 'done' && live.expandedFrom != null && <p className="muted small">Fewer than 10 found within {live.expandedFrom} km, so the agent widened the search to {live.km} km.</p>}
       {live.stopped && <p className="muted small">Search stopped. Showing the {live.items.length} found before you stopped it.</p>}
       {live.status === 'done' && live.items.length === 0 && (
         <p className="empty">No listed {live.label || 'businesses'} found here. Try a bigger distance, e.g. +20 km.</p>
