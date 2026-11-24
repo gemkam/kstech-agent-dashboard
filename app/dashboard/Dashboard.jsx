@@ -193,11 +193,10 @@ function onePerLead(list) {
   }
   return list.filter((o) => pick[o.lead_id] === o)
 }
-const RADIUS_OPTIONS = [0, 10, 20, 40, 60, 80, 100]
-const RADIUS_TOWNS = {
-  10: 'Ghala and Azaiba', 20: 'Seeb and Al Mawaleh', 40: 'Al Khoud and Al Amerat',
-  60: 'Barka and Al Amerat', 80: 'Quriyat and Samail', 100: 'Nakhal and Al Musanaah',
-}
+const RADIUS_OPTIONS = [5, 10, 15, 20, 25, 35, 45, 55, 65, 75, 85, 95, 100]
+const TOWN_BANDS = [[5, 'Al Khuwair and Qurum'], [10, 'Ghala and Azaiba'], [20, 'Seeb and Al Mawaleh'], [35, 'Al Khoud and Al Amerat'],
+  [55, 'Barka and Al Amerat'], [75, 'Quriyat and Samail'], [95, 'Nakhal and Al Musanaah']]
+const RADIUS_TOWNS = Object.fromEntries(RADIUS_OPTIONS.map((km) => [km, [...TOWN_BANDS].reverse().find(([k]) => k <= km)[1]]))
 
 function fmtDate(value) {
   if (!value) return ''
@@ -271,7 +270,7 @@ export default function Dashboard({
   const [demoError, setDemoError] = useState('')
   const [emailFor, setEmailFor] = useState(null) // lead id, or 'all'
   const [place, setPlace] = useState(null) // { area, label } from the viewer's location, demo only
-  const [radius, setRadius] = useState(client.search_radius_km || 0)
+  const [radius, setRadius] = useState(RADIUS_OPTIONS.includes(client.search_radius_km) ? client.search_radius_km : 5)
   const [reviewStep, setReviewStep] = useState(null) // a finished step the viewer tapped to look at again
   const [radiusNote, setRadiusNote] = useState('')
   const [adding, setAdding] = useState(false)
@@ -425,19 +424,28 @@ export default function Dashboard({
         const seen = new Set()
         items = []
         let failed = 0, lastErr = null
-        for (const [i, t] of q.targets.entries()) {
-          if (signal.aborted) break
-          setLive({ status: 'loading', items: [...items], where: q.place || point.label, label: q.label, km: dist, step: `Searching ${t.label} (${i + 1} of ${q.targets.length})` })
-          try {
-            const found = await lib.searchNearby({ lat: point.lat, lon: point.lon, km: dist, sel: t.sel, max: 300, asType: t.label, signal })
-            for (const b of found) {
-              const key = b.name.toLowerCase()
-              if (seen.has(key)) continue
-              seen.add(key)
-              items.push({ ...b, audienceFor: q.audience, offer: t.why, score: t.score, target: t.label })
-            }
-          } catch (e) { if (signal.aborted) break; failed++; lastErr = e }
+        // two niches at a time, so it is about twice as fast; results appear as each niche finishes
+        let next = 0, done = 0
+        const showStep = (t) => setLive({ status: 'loading', items: [...items], where: q.place || point.label, label: q.label, km: dist,
+          step: `Searching ${t ? t.label : ''} (${done} of ${q.targets.length} niches done)` })
+        const worker = async () => {
+          while (next < q.targets.length && !signal.aborted) {
+            const t = q.targets[next++]
+            showStep(t)
+            try {
+              const found = await lib.searchNearby({ lat: point.lat, lon: point.lon, km: dist, sel: t.sel, max: 300, asType: t.label, signal })
+              for (const b of found) {
+                const key = b.name.toLowerCase()
+                if (seen.has(key)) continue
+                seen.add(key)
+                items.push({ ...b, audienceFor: q.audience, offer: t.why, score: t.score, target: t.label })
+              }
+            } catch (e) { if (signal.aborted) return; failed++; lastErr = e }
+            done++
+            showStep(q.targets[next])
+          }
         }
+        await Promise.all([worker(), worker()])
         if (!signal.aborted && failed === q.targets.length) throw lastErr || new Error('Search failed')
         items.sort((a, b) => b.score - a.score || a.km - b.km)
         items = items.slice(0, 300)
@@ -466,13 +474,10 @@ export default function Dashboard({
     setRadiusNote('')
     if (!isDemo) {
       const res = await setSearchRadius({ clientId: client.id, km })
-      setRadiusNote(res?.error || (km === 0
-        ? 'Saved. The agent will search nearby only.'
-        : `Saved. The agent will search up to +${km} km in the next run.`))
+      setRadiusNote(res?.error || `Saved. The agent will search up to ${km} km in the next run.`)
       return
     }
     if (kind === 'leadgen' && demoStep >= 2 && live.status !== 'idle') runLiveSearch(place, km)
-    if (km === 0) return
     if (demoStep < 2) {
       setRadiusNote(`The agent will search up to +${km} km when you press Start agent.`)
       return
@@ -1395,7 +1400,7 @@ function AgentBar({ client, service, isAdmin, isDemo, canSearch, searching, onSe
             <span className="sr-only">Search distance</span>
             <select value={radius} onChange={(e) => onRadius(Number(e.target.value))} disabled={running && isDemo}>
               {RADIUS_OPTIONS.map((km) => (
-                <option key={km} value={km}>{km === 0 ? 'Nearby' : `+${km} km`}</option>
+                <option key={km} value={km}>{km} km</option>
               ))}
             </select>
           </label>
@@ -1431,7 +1436,7 @@ function AgentBar({ client, service, isAdmin, isDemo, canSearch, searching, onSe
       {canSearch && isAdmin && !isDemo && (
         <SearchHelp
           area={(client.base_area || 'Al Khuwair').split(',')[0]}
-          km={radius || 10}
+          km={radius || 5}
           disabled={pending || searching}
           audiences={AUDIENCE_NAMES}
           onPick={(q) => { setText(q); setError(''); startTransition(async () => { await onSearch(q) }) }}
