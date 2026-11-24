@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
+  addCompany,
   clearLeads,
   updateLead,
   signOut,
@@ -617,6 +618,7 @@ export default function Dashboard({
             <span className="client-name">{client.name}</span>
           )}
           <ThemeToggle />
+          {isAdmin && <AddCompany />}
           {isAdmin && <Link href="/admin" className="btn btn-ghost">Users</Link>}
           {!isDemo && <Link href="/account" className="btn btn-ghost" title="Change password">Account</Link>}
           <form action={signOut}>
@@ -989,6 +991,52 @@ function ThemeToggle() {
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" /></svg>
       )}
     </button>
+  )
+}
+
+// Admin: add another company (a client) and open its dashboard
+function AddCompany() {
+  const router = useRouter()
+  const [open, setOpen] = useState(false)
+  const [name, setName] = useState('')
+  const [niche, setNiche] = useState('')
+  const [area, setArea] = useState('')
+  const [error, setError] = useState('')
+  const [pending, startTransition] = useTransition()
+  if (!open) return <button className="btn btn-ghost" onClick={() => setOpen(true)}>+ Company</button>
+  return (
+    <div className="overlay overlay-top" onClick={() => !pending && setOpen(false)}>
+      <form className="mail add-company" role="dialog" aria-modal="true" aria-label="Add a company" onClick={(e) => e.stopPropagation()}
+        onSubmit={(e) => {
+          e.preventDefault()
+          setError('')
+          startTransition(async () => {
+            const res = await addCompany({ name, niche, area })
+            if (res?.error) { setError(res.error); return }
+            setOpen(false); setName(''); setNiche(''); setArea('')
+            router.push(`/dashboard?client=${res.slug}`)
+          })
+        }}>
+        <div className="mail-head"><h2>Add a company</h2>
+          <button type="button" className="btn btn-plain" onClick={() => setOpen(false)} disabled={pending}>Close</button></div>
+        <div className="mail-body">
+          <label className="field"><span>Company name</span>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Al Noor Travels" required /></label>
+          <label className="field"><span>Their niche (what they sell)</span>
+            <select value={niche} onChange={(e) => setNiche(e.target.value)}>
+              <option value="">Choose...</option>
+              {AUDIENCE_NAMES.map((a) => <option key={a} value={a}>{a[0].toUpperCase() + a.slice(1)}</option>)}
+            </select></label>
+          <label className="field"><span>Area</span>
+            <input value={area} onChange={(e) => setArea(e.target.value)} placeholder="e.g. Ruwi, Muscat" /></label>
+          <p className="sub">The search finds this company's customers, and drafts go out in this company's name.</p>
+          {error && <p className="error">{error}</p>}
+          <div className="mail-actions">
+            <button className="btn btn-brass" type="submit" disabled={pending || !name.trim()}>{pending ? 'Adding...' : 'Add company'}</button>
+          </div>
+        </div>
+      </form>
+    </div>
   )
 }
 
@@ -1449,7 +1497,7 @@ function AgentBar({ client, service, isAdmin, isDemo, canSearch, searching, onSe
 
       {canSearch && (
         <div className="agent-actions">
-          <form className="agent-admin" onSubmit={(e) => { e.preventDefault(); if (!pending && !searching) search() }}>
+          {isDemo && <form className="agent-admin" onSubmit={(e) => { e.preventDefault(); if (!pending && !searching) search() }}>
             <input
               value={text}
               onChange={(e) => setText(e.target.value)}
@@ -1459,7 +1507,7 @@ function AgentBar({ client, service, isAdmin, isDemo, canSearch, searching, onSe
             />
             <button type="submit" className="btn btn-brass" disabled={pending || searching}>{searching ? 'Searching...' : 'Search'}</button>
             {error && <span className="error">{error}</span>}
-          </form>
+          </form>}
           {isAdmin && !isDemo && running && !searching && (
             <button type="button" className="link-btn small" onClick={finish} disabled={pending}>Stop the old run</button>
           )}
@@ -1472,6 +1520,7 @@ function AgentBar({ client, service, isAdmin, isDemo, canSearch, searching, onSe
           km={radius || 5}
           disabled={pending || searching}
           audiences={AUDIENCE_NAMES}
+          niche={client.niche}
           onPick={(q) => { setText(q); setError(''); startTransition(async () => { await onSearch(q) }) }}
         />
       )}
@@ -2247,20 +2296,24 @@ function LiveResults({ live, isDemo, service, clientId, onRetry, onStop, clientN
 const AUDIENCE_NAMES = ['travel agencies', 'rent a car', 'facility management and cleaning', 'printing and signage', 'IT and CCTV',
   'corporate catering', 'training institutes', 'manpower and recruitment', 'pest control', 'office furniture']
 
-function SearchHelp({ area, km, disabled, onPick, audiences }) {
-  const [pick, setPick] = useState('')
+function SearchHelp({ area, km, disabled, onPick, audiences, niche }) {
+  const [pick, setPick] = useState(audiences.includes(niche) ? niche : '')
+  useEffect(() => { setPick(audiences.includes(niche) ? niche : '') }, [niche, audiences])
   const q = (what) => `find customers for ${what} near ${area} +${km} km`
   return (
     <div className="search-help">
       <label className="audience-pick">
         <span className="sub">Find customers for</span>
         <select value={pick} disabled={disabled} aria-label="Find customers for"
-          onChange={(e) => { const v = e.target.value; setPick(v); if (v) onPick(q(v)) }}>
+          onChange={(e) => setPick(e.target.value)}>
           <option value="">Choose a niche...</option>
           {audiences.map((a) => <option key={a} value={a}>{a[0].toUpperCase() + a.slice(1)}</option>)}
         </select>
       </label>
-      <p className="sub">The agent searches every type of business that buys from this niche, within {km} km of {area}, and gives each lead its reason. You can still type your own search, e.g. "find hotels near Qurum +20 km".</p>
+      <button type="button" className="btn btn-brass" disabled={disabled || !pick} onClick={() => onPick(q(pick))}>
+        {disabled ? 'Searching...' : 'Start search'}
+      </button>
+      <p className="sub">The agent searches every type of business that buys from this niche, within {km} km of {area}, and gives each lead its reason.</p>
     </div>
   )
 }

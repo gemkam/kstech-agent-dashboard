@@ -199,6 +199,27 @@ export async function addClient(formData) {
   revalidatePath('/admin')
 }
 
+// Admin: add a company from the dashboard. Returns its slug so the dashboard can open it.
+export async function addCompany({ name, niche, area }) {
+  const supabase = createClient()
+  const n = clean(name, 120)
+  if (!n) return { error: 'Type the company name.' }
+  const base = n.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'company'
+  let slug = base
+  for (let i = 2; i < 50; i++) {
+    const { data } = await supabase.from('clients').select('id').eq('slug', slug).maybeSingle()
+    if (!data) break
+    slug = `${base}-${i}`
+  }
+  const { error } = await supabase.from('clients').insert({
+    name: n, slug, niche: clean(niche, 60), base_area: clean(area, 80) || 'Al Khuwair, Muscat',
+    description: niche ? `${n}, a ${clean(niche, 60)} business` : null,
+  })
+  if (error) return { error: 'Only admins can add companies.' }
+  revalidatePath('/dashboard')
+  return { ok: true, slug }
+}
+
 // Client or admin: mark a follow-up done / not done
 export async function completeFollowup({ id, done = true }) {
   const supabase = createClient()
