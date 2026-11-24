@@ -821,3 +821,11 @@ textarea { width: 100%; resize: vertical; line-height: 1.6; }
 .add-company .field input, .add-company .field select { width: 100%; }
 .elapsed { font-family: ui-monospace, monospace; font-size: 0.8em; padding: 0.1em 0.5em; border-radius: 999px; border: 1px solid currentColor; opacity: 0.75; margin-left: 0.4rem; white-space: nowrap; }
 .elapsed-on { color: var(--gold, #bf9748); opacity: 1; }
+.search-buttons { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+.btn-stop {
+  background: linear-gradient(180deg, var(--gold), #7d5f25);
+  color: #fff8e6; font-weight: 600; border-color: #7d5f25;
+  display: inline-flex; align-items: center; gap: 0.45rem;
+}
+.btn-stop::before { content: ''; width: 0.6em; height: 0.6em; background: currentColor; border-radius: 2px; }
+.btn-stop:hover:not(:disabled) { background: #7d5f25; }

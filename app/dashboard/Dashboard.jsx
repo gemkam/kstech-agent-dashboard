@@ -653,6 +653,7 @@ export default function Dashboard({
           isDemo={isDemo}
           canSearch={(isAdmin && !isDemo) || (isDemo && kind === 'leadgen' && demoStep >= 2)}
           searching={live.status === 'loading'}
+          onStop={() => searchCtrl.current?.abort()}
           onSearch={(text) => { lastSearch.current = text; return runLiveSearch(place, radius, text) }}
           calm={!isDemo}
           focus={focusOn('sec-agent')}
@@ -1389,7 +1390,7 @@ function AnimatedNumber({ value }) {
   return <>{shown}</>
 }
 
-function AgentBar({ client, service, isAdmin, isDemo, canSearch, searching, onSearch, running, step, progress, latestRun, place, radius, radiusNote, onRadius, showRadius, calm, focus, leadsWanted, onLeadsWanted }) {
+function AgentBar({ client, service, isAdmin, isDemo, canSearch, searching, onSearch, running, step, progress, latestRun, place, radius, radiusNote, onRadius, showRadius, calm, focus, leadsWanted, onLeadsWanted, onStop }) {
   const router = useRouter()
   const [locating, setLocating] = useState(false)
   const [locNote, setLocNote] = useState('')
@@ -1507,6 +1508,8 @@ function AgentBar({ client, service, isAdmin, isDemo, canSearch, searching, onSe
           disabled={pending || searching}
           audiences={AUDIENCE_NAMES}
           niche={client.niche}
+          searching={searching}
+          onStop={onStop}
           onPick={(q) => { setText(q); setError(''); startTransition(async () => { await onSearch(q) }) }}
         />
       )}
@@ -2213,9 +2216,7 @@ function LiveResults({ live, isDemo, service, clientId, onRetry, onStop, clientN
           {live.startedAt && <Elapsed from={live.startedAt} to={live.status === 'loading' ? null : live.endedAt} />}
         </h2>
         <span className="inline-fields">
-          {live.status === 'loading'
-            ? <button className="btn btn-danger" onClick={onStop}>Stop search</button>
-            : <button className="btn btn-plain" onClick={onRetry}>Search again</button>}
+          {live.status !== 'loading' && <button className="btn btn-plain" onClick={onRetry}>Search again</button>}
           {live.status !== 'loading' && live.items.length > 0 && (
             <button className="btn btn-quiet" disabled={pdfBusy} onClick={downloadPdf}>{pdfBusy ? 'Creating PDF...' : 'Download results (PDF)'}</button>
           )}
@@ -2296,7 +2297,7 @@ function LiveResults({ live, isDemo, service, clientId, onRetry, onStop, clientN
 const AUDIENCE_NAMES = ['travel agencies', 'rent a car', 'facility management and cleaning', 'printing and signage', 'IT and CCTV',
   'corporate catering', 'training institutes', 'manpower and recruitment', 'pest control', 'office furniture']
 
-function SearchHelp({ area, km, disabled, onPick, audiences, niche }) {
+function SearchHelp({ area, km, disabled, onPick, audiences, niche, searching, onStop }) {
   const [pick, setPick] = useState(audiences.includes(niche) ? niche : '')
   useEffect(() => { setPick(audiences.includes(niche) ? niche : '') }, [niche, audiences])
   const q = (what) => `find customers for ${what} near ${area} +${km} km`
@@ -2310,9 +2311,12 @@ function SearchHelp({ area, km, disabled, onPick, audiences, niche }) {
           {audiences.map((a) => <option key={a} value={a}>{a[0].toUpperCase() + a.slice(1)}</option>)}
         </select>
       </label>
-      <button type="button" className="btn btn-brass" disabled={disabled || !pick} onClick={() => onPick(q(pick))}>
-        {disabled ? 'Searching...' : 'Start search'}
-      </button>
+      <div className="search-buttons">
+        <button type="button" className="btn btn-brass" disabled={disabled || !pick} onClick={() => onPick(q(pick))}>
+          {searching ? 'Searching...' : 'Start search'}
+        </button>
+        {searching && <button type="button" className="btn btn-stop" onClick={onStop}>Stop search</button>}
+      </div>
       <p className="sub">The agent searches every type of business that buys from this niche, within {km} km of {area}, and gives each lead its reason.</p>
     </div>
   )
