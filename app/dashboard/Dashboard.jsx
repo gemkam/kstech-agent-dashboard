@@ -193,6 +193,7 @@ function onePerLead(list) {
   }
   return list.filter((o) => pick[o.lead_id] === o)
 }
+const LEADS_OPTIONS = [5, 10, 20, 25]
 const RADIUS_OPTIONS = [5, 10, 15, 20, 25, 35, 45, 55, 65, 75, 85, 95, 100]
 const TOWN_BANDS = [[5, 'Al Khuwair and Qurum'], [10, 'Ghala and Azaiba'], [20, 'Seeb and Al Mawaleh'], [35, 'Al Khoud and Al Amerat'],
   [55, 'Barka and Al Amerat'], [75, 'Quriyat and Samail'], [95, 'Nakhal and Al Musanaah']]
@@ -270,6 +271,7 @@ export default function Dashboard({
   const [demoError, setDemoError] = useState('')
   const [emailFor, setEmailFor] = useState(null) // lead id, or 'all'
   const [place, setPlace] = useState(null) // { area, label } from the viewer's location, demo only
+  const [leadsWanted, setLeadsWanted] = useState(10)
   const [radius, setRadius] = useState(RADIUS_OPTIONS.includes(client.search_radius_km) ? client.search_radius_km : 5)
   const [reviewStep, setReviewStep] = useState(null) // a finished step the viewer tapped to look at again
   const [radiusNote, setRadiusNote] = useState('')
@@ -458,8 +460,8 @@ export default function Dashboard({
         return items
       }
 
-      // Bring at least 10 leads: if fewer are found, widen the distance automatically up to 100 km
-      const MIN_LEADS = 10
+      // Bring the number of leads chosen (5 to 25): if fewer are found, widen the distance automatically up to 100 km
+      const MIN_LEADS = leadsWanted
       let items = await searchAt(dist)
       let usedKm = dist
       // bigger jumps so a quiet niche does not take 12 rounds
@@ -471,9 +473,11 @@ export default function Dashboard({
         if (more.length >= items.length) items = more
       }
       const expanded = usedKm !== dist
+      const totalFound = items.length
+      items = items.slice(0, MIN_LEADS) // best matches first, as many as asked for
 
       const stopped = signal.aborted
-      setLive({ status: 'done', items, where, label: q.label, km: usedKm, near: point.label, stopped, runId, searchLabel, expandedFrom: expanded ? dist : null })
+      setLive({ status: 'done', items, where, label: q.label, km: usedKm, near: point.label, stopped, runId, searchLabel, expandedFrom: expanded ? dist : null, wanted: MIN_LEADS, totalFound })
       await finish(`${stopped ? 'Stopped early. ' : ''}Found ${items.length} ${q.label} near ${point.label} (${usedKm} km${expanded ? `, widened from ${dist} km` : ''})`)
       return items.length
     } catch (e) {
@@ -645,6 +649,8 @@ export default function Dashboard({
 
         <AgentBar
           client={client}
+          leadsWanted={leadsWanted}
+          onLeadsWanted={isDemo ? null : setLeadsWanted}
           service={isDemo ? kind : service}
           isAdmin={isAdmin}
           running={running}
@@ -1349,7 +1355,7 @@ function AnimatedNumber({ value }) {
   return <>{shown}</>
 }
 
-function AgentBar({ client, service, isAdmin, isDemo, canSearch, searching, onSearch, running, step, progress, latestRun, place, radius, radiusNote, onRadius, showRadius, calm, focus }) {
+function AgentBar({ client, service, isAdmin, isDemo, canSearch, searching, onSearch, running, step, progress, latestRun, place, radius, radiusNote, onRadius, showRadius, calm, focus, leadsWanted, onLeadsWanted }) {
   const router = useRouter()
   const [locating, setLocating] = useState(false)
   const [locNote, setLocNote] = useState('')
@@ -1423,6 +1429,14 @@ function AgentBar({ client, service, isAdmin, isDemo, canSearch, searching, onSe
               ))}
             </select>
           </label>
+          {onLeadsWanted && (
+            <label className="radius">
+              <span className="sr-only">Leads per search</span>
+              <select value={leadsWanted} onChange={(e) => onLeadsWanted(Number(e.target.value))} disabled={searching}>
+                {LEADS_OPTIONS.map((n) => <option key={n} value={n}>{n} leads</option>)}
+              </select>
+            </label>
+          )}
         </div>}
         {showRadius && radiusNote && <p className="radius-note">{radiusNote}</p>}
         {locNote && <p className="radius-note">{locNote}</p>}
@@ -2171,7 +2185,8 @@ function LiveResults({ live, isDemo, service, clientId, onRetry, onStop, clientN
         <p className="error">The map does not know that place name. Check the spelling, e.g. Al Khuwair, Qurum, Ghubrah, Bousher, Ruwi, Seeb, Al Mawaleh.</p>
       )}
       {live.status === 'error' && <p className="error">The live map search is busy right now. Try "Search again" in a moment.{live.reason ? ` (${live.reason})` : ''}</p>}
-      {live.status === 'done' && live.expandedFrom != null && <p className="muted small">Fewer than 10 found within {live.expandedFrom} km, so the agent widened the search to {live.km} km.</p>}
+      {live.status === 'done' && live.expandedFrom != null && <p className="muted small">Fewer than {live.wanted} found within {live.expandedFrom} km, so the agent widened the search to {live.km} km.</p>}
+      {live.status === 'done' && live.totalFound > live.items.length && <p className="muted small">Showing the best {live.items.length} of {live.totalFound} found. Choose more leads per search to see more.</p>}
       {live.stopped && <p className="muted small">Search stopped. Showing the {live.items.length} found before you stopped it.</p>}
       {live.status === 'done' && live.items.length === 0 && (
         <p className="empty">No listed {live.label || 'businesses'} found here. Try a bigger distance, e.g. +20 km.</p>
