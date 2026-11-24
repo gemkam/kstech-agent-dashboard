@@ -766,7 +766,7 @@ export default function Dashboard({
                     {isAdmin && !isDemo && !adding && (
                       <button className="btn btn-brass" onClick={() => setAdding(true)}>+ Add lead</button>
                     )}
-                    {isAdmin && !isDemo && leads.length > 0 && (
+                    {isAdmin && !isDemo && allLeads.length > 0 && (
                       <ClearLeads clientId={client.id} service={service} count={leads.length} label={DEMO_TYPE_LABEL[service]} />
                     )}
                     <input type="search" placeholder="Search name, area, category" value={query}
@@ -2201,13 +2201,20 @@ function ClearLeads({ clientId, service, count, label }) {
   if (!asking) return <button className="btn btn-plain" onClick={() => setAsking(true)}>Clear all leads</button>
   return (
     <span className="clear-confirm" role="alert">
-      <span className="error">Delete all {count} {label.toLowerCase()} leads and their messages? This cannot be undone.</span>
+      <span className="error">Delete leads and their messages? This cannot be undone.</span>
       <button className="btn btn-danger" disabled={pending}
         onClick={() => startTransition(async () => {
           const res = await clearLeads({ clientId, service })
           if (res?.error) setError(res.error); else setAsking(false)
         })}>
-        {pending ? 'Deleting...' : `Yes, delete ${count}`}
+        {pending ? 'Deleting...' : `Delete ${count} ${label.toLowerCase()} leads`}
+      </button>
+      <button className="btn btn-danger" disabled={pending}
+        onClick={() => startTransition(async () => {
+          const res = await clearLeads({ clientId, service: 'all' })
+          if (res?.error) setError(res.error); else setAsking(false)
+        })}>
+        {pending ? 'Deleting...' : 'Delete all leads (every service)'}
       </button>
       <button className="btn btn-plain" disabled={pending} onClick={() => setAsking(false)}>Cancel</button>
       {error && <span className="error">{error}</span>}
