@@ -412,7 +412,7 @@ export default function Dashboard({
       if (fallback) point = { lat: 23.5880, lon: 58.4060, label: 'Al Khuwair, Muscat' }
       const where = fallback ? 'Al Khuwair, Muscat (location not shared)' : point.label
 
-      const items = await lib.searchNearby({ lat: point.lat, lon: point.lon, km: dist, sel: q.sel, cuisine: q.cuisine, max: q.everything ? 120 : 60 })
+      const items = await lib.searchNearby({ lat: point.lat, lon: point.lon, km: dist, sel: q.sel, cuisine: q.cuisine, max: 300 })
       setLive({ status: 'done', items, where, label: q.label, km: dist, near: point.label })
       await finish(`Found ${items.length} ${q.label} near ${point.label}${dist ? ` (+${dist} km)` : ''}`)
       return items.length
