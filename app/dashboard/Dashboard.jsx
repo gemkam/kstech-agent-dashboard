@@ -386,7 +386,8 @@ export default function Dashboard({
     searchCtrl.current = ctrl
     const signal = ctrl.signal
     const searchLabel = `${q.label[0].toUpperCase() + q.label.slice(1)}${q.place ? ` near ${q.place}` : ''}${dist ? ` +${dist} km` : ''}`
-    setLive({ status: 'loading', items: [], where: q.place || here?.label || client.base_area || 'your area', label: q.label, km: dist })
+    const startedAt = Date.now()
+    setLive({ status: 'loading', items: [], where: q.place || here?.label || client.base_area || 'your area', label: q.label, km: dist, startedAt })
 
     let runId = null
     const realRun = isAdmin && !isDemo
@@ -404,7 +405,7 @@ export default function Dashboard({
       if (q.place) {
         point = await lib.geocode(q.place)
         if (!point) {
-          setLive({ status: 'noplace', items: [], where: q.place, label: q.label, km: dist })
+          setLive({ status: 'noplace', items: [], where: q.place, label: q.label, km: dist, startedAt, endedAt: Date.now() })
           await finish(`Place "${q.place}" not found on the map`)
           return 0
         }
@@ -425,33 +426,18 @@ export default function Dashboard({
       const searchAt = async (dist) => {
         let items
         if (q.targets) {
-          // "customers for ...": search each buyer niche in turn and give every lead its reason
-          const seen = new Set()
+          // "customers for ...": ONE map request for all buyer niches, then each result gets its niche and reason
+          setLive((l) => ({ ...l, status: 'loading', step: `Searching ${q.targets.length} types of buyers within ${dist} km` }))
+          const sel = [...new Set(q.targets.flatMap((t) => t.sel))]
+          const found = await lib.searchNearby({ lat: point.lat, lon: point.lon, km: dist, sel, max: 2000, asType: 'Business', signal, oneQuery: true })
           items = []
-          let failed = 0, lastErr = null
-          // two niches at a time, so it is about twice as fast; results appear as each niche finishes
-          let next = 0, done = 0
-          const showStep = (t) => setLive({ status: 'loading', items: [...items], where: q.place || point.label, label: q.label, km: dist,
-            step: `Searching ${t ? t.label : ''} (${done} of ${q.targets.length} niches done)` })
-          const worker = async () => {
-            while (next < q.targets.length && !signal.aborted) {
-              const t = q.targets[next++]
-              showStep(t)
-              try {
-                const found = await lib.searchNearby({ lat: point.lat, lon: point.lon, km: dist, sel: t.sel, max: 300, asType: t.label, signal })
-                for (const b of found) {
-                  const key = b.name.toLowerCase()
-                  if (seen.has(key)) continue
-                  seen.add(key)
-                  items.push({ ...b, audienceFor: q.audience, offer: t.why, score: t.score, target: t.label })
-                }
-              } catch (e) { if (signal.aborted) return; failed++; lastErr = e }
-              done++
-              showStep(q.targets[next])
-            }
+          for (const b of found) {
+            const t = q.targets.find((x) => x.sel.some((one) => lib.matchSel(b.tags, one)))
+            if (!t) continue
+            const vague = !b.type || b.type === 'Business' || b.type === 'Office' || b.type === 'Company office'
+            items.push({ ...b, tags: undefined, type: vague ? t.label[0].toUpperCase() + t.label.slice(1) : b.type,
+              audienceFor: q.audience, offer: t.why, score: t.score, target: t.label })
           }
-          await Promise.all([worker(), worker()])
-          if (!signal.aborted && failed === q.targets.length) throw lastErr || new Error('Search failed')
           items.sort((a, b) => b.score - a.score || a.km - b.km)
           items = items.slice(0, 300)
         } else {
@@ -478,16 +464,16 @@ export default function Dashboard({
       items = items.slice(0, MIN_LEADS) // best matches first, as many as asked for
 
       const stopped = signal.aborted
-      setLive({ status: 'done', items, where, label: q.label, km: usedKm, near: point.label, stopped, runId, searchLabel, expandedFrom: expanded ? dist : null, wanted: MIN_LEADS, totalFound })
+      setLive({ status: 'done', items, where, label: q.label, km: usedKm, near: point.label, stopped, runId, searchLabel, expandedFrom: expanded ? dist : null, wanted: MIN_LEADS, totalFound, startedAt, endedAt: Date.now() })
       await finish(`${stopped ? 'Stopped early. ' : ''}Found ${items.length} ${q.label} near ${point.label} (${usedKm} km${expanded ? `, widened from ${dist} km` : ''})`)
       return items.length
     } catch (e) {
       if (signal.aborted) {
-        setLive((l) => ({ ...l, status: 'done', stopped: true, runId, searchLabel }))
+        setLive((l) => ({ ...l, status: 'done', stopped: true, runId, searchLabel, endedAt: Date.now() }))
         await finish('Search stopped by you')
         return 0
       }
-      setLive((l) => ({ ...l, status: 'error', items: [], reason: String(e?.message || '').slice(0, 160) }))
+      setLive((l) => ({ ...l, status: 'error', items: [], reason: String(e?.message || '').slice(0, 160), endedAt: Date.now() }))
       await finish(`Search stopped: ${String(e?.message || 'the map service was busy').slice(0, 120)}`)
       return 0
     }
@@ -2164,6 +2150,19 @@ function AddLeadForm({ clientId, service, onDone, onOpenLead }) {
   )
 }
 
+// Running clock for a search: 0:42, then the final time when it ends
+function Elapsed({ from, to }) {
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    if (to) return
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [to])
+  const secs = Math.max(0, Math.round(((to || now) - from) / 1000))
+  const txt = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`
+  return <span className={to ? 'elapsed' : 'elapsed elapsed-on'} title={to ? 'Time the search took' : 'Time searching so far'}>{to ? `took ${txt}` : txt}</span>
+}
+
 function LiveResults({ live, isDemo, service, clientId, onRetry, onStop, clientName, onClear, onSaved }) {
   const [all, setAll] = useState(false)
   const [picked, setPicked] = useState({})
@@ -2194,7 +2193,7 @@ function LiveResults({ live, isDemo, service, clientId, onRetry, onStop, clientN
   function save() {
     setMsg('')
     startTransition(async () => {
-      const res = await addFoundLeads({ clientId, service, items: pickedList, withDrafts, searchedNear: live.near || live.where, runId: live.runId || null, searchLabel: live.searchLabel || null })
+      const res = await addFoundLeads({ clientId, service, items: pickedList.map(({ tags, ...b }) => b), withDrafts, searchedNear: live.near || live.where, runId: live.runId || null, searchLabel: live.searchLabel || null })
       if (res?.error) { setMsg(res.error); return }
       setMsg(`Saved ${res.added} lead${res.added === 1 ? '' : 's'}${res.drafts ? ` and ${res.drafts} draft${res.drafts === 1 ? '' : 's'} for approval` : ''}${res.dup ? `. ${res.dup} look like duplicates, check the tags` : ''}.`)
       setPicked({})
@@ -2210,7 +2209,8 @@ function LiveResults({ live, isDemo, service, clientId, onRetry, onStop, clientN
       <div className="panel-head">
         <h2>
           <span className="live-pill"><span className="live-pill-dot" aria-hidden="true" />Live</span>{' '}
-          {title}
+          {title}{' '}
+          {live.startedAt && <Elapsed from={live.startedAt} to={live.status === 'loading' ? null : live.endedAt} />}
         </h2>
         <span className="inline-fields">
           {live.status === 'loading'
