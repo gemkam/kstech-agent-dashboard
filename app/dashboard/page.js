@@ -47,7 +47,7 @@ export default async function DashboardPage({ searchParams }) {
   const [leadsRes, outreachRes, followupsRes, visitsRes, runRes, eventsRes, sentRes, firstSentRes, mailboxRes] = await Promise.all([
     supabase
       .from('leads')
-      .select('id, ref_code, business_name, category, area, phone, whatsapp, email, website, google_maps_url, source, problem_found, problem_evidence, suggested_service, why_chosen, score, status, notes, do_not_contact, dnc_reason, dnc_at, duplicate_of, service, created_at, updated_at')
+      .select('id, ref_code, business_name, category, area, phone, whatsapp, email, website, google_maps_url, source, problem_found, problem_evidence, suggested_service, why_chosen, score, status, notes, do_not_contact, dnc_reason, dnc_at, duplicate_of, service, search_run_id, search_label, created_at, updated_at')
       .eq('client_id', client.id)
       .order('created_at', { ascending: false }),
     supabase

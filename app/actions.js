@@ -362,7 +362,7 @@ export async function clearLeads({ clientId, service }) {
 }
 
 // Admin: save businesses from the live search as leads, optionally with ready-made drafts
-export async function addFoundLeads({ clientId, service, items, withDrafts, searchedNear }) {
+export async function addFoundLeads({ clientId, service, items, withDrafts, searchedNear, runId, searchLabel }) {
   const supabase = createClient()
   const svc = ['leadgen', 'quotes', 'booking'].includes(service) ? service : 'leadgen'
   const list = Array.isArray(items) ? items.slice(0, 300) : []
@@ -391,6 +391,8 @@ export async function addFoundLeads({ clientId, service, items, withDrafts, sear
       why_chosen: b.audienceFor ? `${b.type || 'Business'}, a likely buyer for ${clean(b.audienceFor, 60)}: ${clean(b.offer, 160)}. About ${Number(b.km || 0).toFixed(1)} km from ${searchedNear || 'the search area'}.` : `${b.type || 'Business'} about ${Number(b.km || 0).toFixed(1)} km from ${searchedNear || 'the search area'}.${gaps.length ? ' ' + gaps.join('. ') + '.' : ''}`,
       score: Number.isFinite(Number(b.score)) ? Math.max(1, Math.min(10, Math.round(Number(b.score)))) : null,
       status: 'new',
+      search_run_id: runId || null,
+      search_label: clean(searchLabel, 160),
     }
     const { data: lead, error } = await supabase.from('leads').insert(row).select('id, ref_code, duplicate_of, do_not_contact').single()
     if (error || !lead) continue

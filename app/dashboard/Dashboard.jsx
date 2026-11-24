@@ -277,6 +277,7 @@ export default function Dashboard({
   const [adding, setAdding] = useState(false)
   const [live, setLive] = useState({ status: 'idle', items: [], where: '' }) // live map search results
   const lastSearch = useRef('')
+  const searchCtrl = useRef(null) // lets the Stop button cancel a running map search
 
   const isDemo = client.is_demo
   const kind = client.demo_kind || 'leadgen'
@@ -378,6 +379,11 @@ export default function Dashboard({
     const q = lib.parseQuery(text)
     const dist = q.km ?? km ?? 0
     if (q.km != null && RADIUS_OPTIONS.includes(q.km)) setRadius(q.km)
+    searchCtrl.current?.abort()
+    const ctrl = new AbortController()
+    searchCtrl.current = ctrl
+    const signal = ctrl.signal
+    const searchLabel = `${q.label[0].toUpperCase() + q.label.slice(1)}${q.place ? ` near ${q.place}` : ''}${dist ? ` +${dist} km` : ''}`
     setLive({ status: 'loading', items: [], where: q.place || here?.label || client.base_area || 'your area', label: q.label, km: dist })
 
     let runId = null
@@ -420,27 +426,35 @@ export default function Dashboard({
         items = []
         let failed = 0, lastErr = null
         for (const [i, t] of q.targets.entries()) {
+          if (signal.aborted) break
           setLive({ status: 'loading', items: [...items], where: q.place || point.label, label: q.label, km: dist, step: `Searching ${t.label} (${i + 1} of ${q.targets.length})` })
           try {
-            const found = await lib.searchNearby({ lat: point.lat, lon: point.lon, km: dist, sel: t.sel, max: 300, asType: t.label })
+            const found = await lib.searchNearby({ lat: point.lat, lon: point.lon, km: dist, sel: t.sel, max: 300, asType: t.label, signal })
             for (const b of found) {
               const key = b.name.toLowerCase()
               if (seen.has(key)) continue
               seen.add(key)
               items.push({ ...b, audienceFor: q.audience, offer: t.why, score: t.score, target: t.label })
             }
-          } catch (e) { failed++; lastErr = e }
+          } catch (e) { if (signal.aborted) break; failed++; lastErr = e }
         }
-        if (failed === q.targets.length) throw lastErr || new Error('Search failed')
+        if (!signal.aborted && failed === q.targets.length) throw lastErr || new Error('Search failed')
         items.sort((a, b) => b.score - a.score || a.km - b.km)
         items = items.slice(0, 300)
       } else {
-        items = await lib.searchNearby({ lat: point.lat, lon: point.lon, km: dist, sel: q.sel, cuisine: q.cuisine, max: 300 })
+        items = await lib.searchNearby({ lat: point.lat, lon: point.lon, km: dist, sel: q.sel, cuisine: q.cuisine, max: 300, signal,
+          onPartial: (part) => setLive((l) => ({ ...l, items: part, step: `${part.length} found so far, still searching` })) })
       }
-      setLive({ status: 'done', items, where, label: q.label, km: dist, near: point.label })
-      await finish(`Found ${items.length} ${q.label} near ${point.label}${dist ? ` (+${dist} km)` : ''}`)
+      const stopped = signal.aborted
+      setLive({ status: 'done', items, where, label: q.label, km: dist, near: point.label, stopped, runId, searchLabel })
+      await finish(`${stopped ? 'Stopped early. ' : ''}Found ${items.length} ${q.label} near ${point.label}${dist ? ` (+${dist} km)` : ''}`)
       return items.length
     } catch (e) {
+      if (signal.aborted) {
+        setLive((l) => ({ ...l, status: 'done', stopped: true, runId, searchLabel }))
+        await finish('Search stopped by you')
+        return 0
+      }
       setLive((l) => ({ ...l, status: 'error', items: [], reason: String(e?.message || '').slice(0, 160) }))
       await finish(`Search stopped: ${String(e?.message || 'the map service was busy').slice(0, 120)}`)
       return 0
@@ -652,6 +666,8 @@ export default function Dashboard({
           />
         )}
 
+        {!isDemo && <SearchReports leads={allLeads} outreach={allOutreach} clientName={client.name} />}
+
         {show(3) && (drafts.length > 0 || approved.length > 0 || isDemo) && (
           <Approvals
             drafts={drafts}
@@ -669,6 +685,8 @@ export default function Dashboard({
         {((isDemo && kind === 'leadgen' && show(2)) || (!isDemo && isAdmin)) && live.status !== 'idle' && (
           <LiveResults live={live} isDemo={isDemo} service={service} clientId={client.id}
             onRetry={() => runLiveSearch(place, radius, lastSearch.current)}
+            onStop={() => searchCtrl.current?.abort()}
+            clientName={client.name}
             onClear={() => setLive({ status: 'idle', items: [], where: '' })}
             onSaved={() => router.refresh()} />
         )}
@@ -2059,7 +2077,7 @@ function AddLeadForm({ clientId, service, onDone, onOpenLead }) {
   )
 }
 
-function LiveResults({ live, isDemo, service, clientId, onRetry, onClear, onSaved }) {
+function LiveResults({ live, isDemo, service, clientId, onRetry, onStop, clientName, onClear, onSaved }) {
   const [all, setAll] = useState(false)
   const [picked, setPicked] = useState({})
   const [withDrafts, setWithDrafts] = useState(true)
@@ -2076,10 +2094,20 @@ function LiveResults({ live, isDemo, service, clientId, onRetry, onClear, onSave
     setMsg('')
   }, [live.items])
 
+  const [pdfBusy, setPdfBusy] = useState(false)
+  async function downloadPdf() {
+    setPdfBusy(true)
+    try {
+      const { downloadSearchResults } = await import('@/lib/searchReport')
+      await downloadSearchResults({ live, clientName })
+    } catch { setMsg('Could not create the PDF. Try again.') }
+    setPdfBusy(false)
+  }
+
   function save() {
     setMsg('')
     startTransition(async () => {
-      const res = await addFoundLeads({ clientId, service, items: pickedList, withDrafts, searchedNear: live.near || live.where })
+      const res = await addFoundLeads({ clientId, service, items: pickedList, withDrafts, searchedNear: live.near || live.where, runId: live.runId || null, searchLabel: live.searchLabel || null })
       if (res?.error) { setMsg(res.error); return }
       setMsg(`Saved ${res.added} lead${res.added === 1 ? '' : 's'}${res.drafts ? ` and ${res.drafts} draft${res.drafts === 1 ? '' : 's'} for approval` : ''}${res.dup ? `. ${res.dup} look like duplicates, check the tags` : ''}.`)
       setPicked({})
@@ -2098,9 +2126,12 @@ function LiveResults({ live, isDemo, service, clientId, onRetry, onClear, onSave
           {title}
         </h2>
         <span className="inline-fields">
-          <button className="btn btn-plain" onClick={onRetry} disabled={live.status === 'loading'}>
-            {live.status === 'loading' ? 'Searching...' : 'Search again'}
-          </button>
+          {live.status === 'loading'
+            ? <button className="btn btn-danger" onClick={onStop}>Stop search</button>
+            : <button className="btn btn-plain" onClick={onRetry}>Search again</button>}
+          {live.status !== 'loading' && live.items.length > 0 && (
+            <button className="btn btn-quiet" disabled={pdfBusy} onClick={downloadPdf}>{pdfBusy ? 'Creating PDF...' : 'Download results (PDF)'}</button>
+          )}
           {!isDemo && <button className="btn btn-plain" onClick={onClear} disabled={live.status === 'loading'}>Close</button>}
         </span>
       </div>
@@ -2116,6 +2147,7 @@ function LiveResults({ live, isDemo, service, clientId, onRetry, onClear, onSave
         <p className="error">The map does not know that place name. Check the spelling, e.g. Al Khuwair, Qurum, Ghubrah, Bousher, Ruwi, Seeb, Al Mawaleh.</p>
       )}
       {live.status === 'error' && <p className="error">The live map search is busy right now. Try "Search again" in a moment.{live.reason ? ` (${live.reason})` : ''}</p>}
+      {live.stopped && <p className="muted small">Search stopped. Showing the {live.items.length} found before you stopped it.</p>}
       {live.status === 'done' && live.items.length === 0 && (
         <p className="empty">No listed {live.label || 'businesses'} found here. Try a bigger distance, e.g. +20 km.</p>
       )}
@@ -2219,6 +2251,62 @@ function ClearLeads({ clientId, service, count, label }) {
       <button className="btn btn-plain" disabled={pending} onClick={() => setAsking(false)}>Cancel</button>
       {error && <span className="error">{error}</span>}
     </span>
+  )
+}
+
+// One report per search: how many leads, messages sent, replies, no reply. Downloadable PDF with charts.
+function SearchReports({ leads, outreach, clientName }) {
+  const [busy, setBusy] = useState('')
+  const [error, setError] = useState('')
+  const groups = useMemo(() => {
+    const g = {}
+    for (const l of leads) {
+      if (!l.search_label) continue
+      const key = l.search_run_id || l.search_label
+      ;(g[key] ||= { key, label: l.search_label, leads: [], at: l.created_at }).leads.push(l)
+      if (l.created_at < g[key].at) g[key].at = l.created_at
+    }
+    return Object.values(g).sort((a, b) => String(b.at).localeCompare(String(a.at)))
+  }, [leads])
+  if (!groups.length) return null
+  const stats = (gr) => {
+    const ids = new Set(gr.leads.map((l) => l.id))
+    const m = outreach.filter((o) => ids.has(o.lead_id))
+    const sent = m.filter((o) => o.sent_at || ['sent', 'replied', 'no_reply'].includes(o.status)).length
+    const replied = m.filter((o) => o.status === 'replied').length
+    return { sent, replied, noReply: sent - replied }
+  }
+  async function download(gr) {
+    setBusy(gr.key)
+    setError('')
+    try {
+      const { downloadSearchReport } = await import('@/lib/searchReport')
+      await downloadSearchReport({ clientName, label: gr.label, leads: gr.leads, outreach })
+    } catch { setError('Could not create the PDF. Try again.') }
+    setBusy('')
+  }
+  return (
+    <section className="panel search-reports" aria-label="Search reports">
+      <div className="panel-head"><h2>Search reports <span className="count">{groups.length}</span></h2></div>
+      <p className="muted small">One report for each search: leads saved, messages sent, replies and no replies, with charts.</p>
+      <ul className="report-list">
+        {groups.slice(0, 20).map((gr) => {
+          const st = stats(gr)
+          return (
+            <li key={gr.key} className="report-row">
+              <div className="live-main">
+                <span className="biz">{gr.label}</span>
+                <span className="sub">{fmtDate(gr.at)}: {gr.leads.length} leads, {st.sent} sent, {st.replied} replied, {st.noReply} no reply</span>
+              </div>
+              <button className="btn btn-quiet" disabled={busy === gr.key} onClick={() => download(gr)}>
+                {busy === gr.key ? 'Creating PDF...' : 'Report (PDF)'}
+              </button>
+            </li>
+          )
+        })}
+      </ul>
+      {error && <p className="error">{error}</p>}
+    </section>
   )
 }
 
