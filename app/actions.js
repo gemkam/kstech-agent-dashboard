@@ -315,6 +315,15 @@ export async function addLead(input) {
 }
 
 // Ready-made first messages for businesses found by the live search (the client still approves each one)
+// Message from the client's business to a likely buyer (audience search)
+function audienceMessage({ sender, audienceFor, name, offer }) {
+  const what = { 'travel agencies': 'travel agency', 'rent a car': 'car rental company', 'training institutes': 'training institute',
+    'manpower and recruitment': 'manpower and recruitment company', 'pest control': 'pest control company',
+    'office furniture': 'office furniture company', 'corporate catering': 'catering company', 'IT and CCTV': 'IT and CCTV company',
+    'printing and signage': 'printing and signage company', 'facility management and cleaning': 'facility management company' }[audienceFor] || 'company'
+  return `Good day. We are ${sender}, a Muscat-based ${what}. Many companies like ${name} work with us for ${String(offer || '').toLowerCase().replace(/\.$/, '')}. We offer corporate rates and one point of contact for your team.\nCould we send you our company profile and rates?`
+}
+
 function templateMessage({ service, name, type, area, hasWebsite, ref, lang }) {
   const link = `https://kstech-solutions.vercel.app/?ref=${ref}#work`
   const where = area ? ` in ${area}` : ''
@@ -337,12 +346,30 @@ function templateMessage({ service, name, type, area, hasWebsite, ref, lang }) {
   return `${intro} ${body}\n${link}\nCan I show you a few examples?`
 }
 
+// Admin: delete all leads of one service for a real (not demo) client; messages and follow-ups go with them
+export async function clearLeads({ clientId, service }) {
+  const supabase = createClient()
+  const { data: c } = await supabase.from('clients').select('id, is_demo').eq('id', clientId).single()
+  if (!c) return { error: 'Company not found.' }
+  if (c.is_demo) return { error: 'Use Restart demo for demo companies.' }
+  let q = supabase.from('leads').delete({ count: 'exact' }).eq('client_id', clientId)
+  if (['leadgen', 'quotes', 'booking'].includes(service)) q = q.eq('service', service)
+  const { error, count } = await q
+  if (error) return { error: 'Only admins can clear leads.' }
+  await supabase.from('agent_events').insert({ client_id: clientId, kind: 'clear', message: `${count ?? 'All'} leads cleared` })
+  revalidatePath('/dashboard')
+  return { ok: true, count }
+}
+
 // Admin: save businesses from the live search as leads, optionally with ready-made drafts
 export async function addFoundLeads({ clientId, service, items, withDrafts, searchedNear }) {
   const supabase = createClient()
   const svc = ['leadgen', 'quotes', 'booking'].includes(service) ? service : 'leadgen'
-  const list = Array.isArray(items) ? items.slice(0, 60) : []
+  const list = Array.isArray(items) ? items.slice(0, 300) : []
   let added = 0, drafts = 0, dup = 0, blocked = 0
+  const { data: client } = await supabase.from('clients').select('name, slug').eq('id', clientId).single()
+  // KS Tech's own account searching for another company: leave the sender for you to fill in before approving
+  const sender = !client || client.slug === 'kstech' ? '[company name]' : client.name
   for (const b of list) {
     const name = clean(b.name, 120)
     if (!name) continue
@@ -360,8 +387,8 @@ export async function addFoundLeads({ clientId, service, items, withDrafts, sear
       source: 'openstreetmap',
       problem_found: gaps[0] || null,
       problem_evidence: gaps.length ? `Public map listing: ${gaps.join(', ').toLowerCase()}` : null,
-      suggested_service: svc === 'quotes' ? 'Quote follow-up agent' : svc === 'booking' ? 'Booking agent' : (b.website ? 'Online booking and WhatsApp ordering' : 'Website with WhatsApp ordering'),
-      why_chosen: `${b.type || 'Business'} about ${Number(b.km || 0).toFixed(1)} km from ${searchedNear || 'the search area'}.${gaps.length ? ' ' + gaps.join('. ') + '.' : ''}`,
+      suggested_service: b.audienceFor ? clean(b.offer, 160) : svc === 'quotes' ? 'Quote follow-up agent' : svc === 'booking' ? 'Booking agent' : (b.website ? 'Online booking and WhatsApp ordering' : 'Website with WhatsApp ordering'),
+      why_chosen: b.audienceFor ? `${b.type || 'Business'}, a likely buyer for ${clean(b.audienceFor, 60)}: ${clean(b.offer, 160)}. About ${Number(b.km || 0).toFixed(1)} km from ${searchedNear || 'the search area'}.` : `${b.type || 'Business'} about ${Number(b.km || 0).toFixed(1)} km from ${searchedNear || 'the search area'}.${gaps.length ? ' ' + gaps.join('. ') + '.' : ''}`,
       score: Number.isFinite(Number(b.score)) ? Math.max(1, Math.min(10, Math.round(Number(b.score)))) : null,
       status: 'new',
     }
@@ -373,15 +400,15 @@ export async function addFoundLeads({ clientId, service, items, withDrafts, sear
     if (lead.do_not_contact) { blocked++; continue }
     const channel = row.phone ? 'whatsapp' : row.email ? 'email' : null
     if (!channel) continue
-    const langs = /pakistan|lahori|karachi|kolachi|peshawari|multani/i.test(`${name} ${b.cuisine || ''}`) ? ['en', 'ur'] : ['en']
+    const langs = b.audienceFor ? ['en'] : /pakistan|lahori|karachi|kolachi|peshawari|multani/i.test(`${name} ${b.cuisine || ''}`) ? ['en', 'ur'] : ['en']
     for (const lang of langs) {
       const { error: dErr } = await supabase.from('outreach').insert({
         lead_id: lead.id,
         client_id: clientId,
         channel,
         language: lang,
-        subject: channel === 'email' ? `Quick idea for ${name}` : null,
-        message_draft: templateMessage({ service: svc, name, type: b.type || 'business', area: row.area, hasWebsite: Boolean(b.website), ref: lead.ref_code, lang }),
+        subject: channel === 'email' ? (b.audienceFor ? `Corporate rates for ${name}` : `Quick idea for ${name}`) : null,
+        message_draft: b.audienceFor ? audienceMessage({ sender, audienceFor: b.audienceFor, name, offer: b.offer }) : templateMessage({ service: svc, name, type: b.type || 'business', area: row.area, hasWebsite: Boolean(b.website), ref: lead.ref_code, lang }),
         status: 'draft',
       })
       if (!dErr) drafts++

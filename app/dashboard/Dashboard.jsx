@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
+  clearLeads,
   updateLead,
   signOut,
   reviewOutreach,
@@ -412,7 +413,30 @@ export default function Dashboard({
       if (fallback) point = { lat: 23.5880, lon: 58.4060, label: 'Al Khuwair, Muscat' }
       const where = fallback ? 'Al Khuwair, Muscat (location not shared)' : point.label
 
-      const items = await lib.searchNearby({ lat: point.lat, lon: point.lon, km: dist, sel: q.sel, cuisine: q.cuisine, max: 300 })
+      let items
+      if (q.targets) {
+        // "customers for ...": search each buyer niche in turn and give every lead its reason
+        const seen = new Set()
+        items = []
+        let failed = 0, lastErr = null
+        for (const [i, t] of q.targets.entries()) {
+          setLive({ status: 'loading', items: [...items], where: q.place || point.label, label: q.label, km: dist, step: `Searching ${t.label} (${i + 1} of ${q.targets.length})` })
+          try {
+            const found = await lib.searchNearby({ lat: point.lat, lon: point.lon, km: dist, sel: t.sel, max: 300, asType: t.label })
+            for (const b of found) {
+              const key = b.name.toLowerCase()
+              if (seen.has(key)) continue
+              seen.add(key)
+              items.push({ ...b, audienceFor: q.audience, offer: t.why, score: t.score, target: t.label })
+            }
+          } catch (e) { failed++; lastErr = e }
+        }
+        if (failed === q.targets.length) throw lastErr || new Error('Search failed')
+        items.sort((a, b) => b.score - a.score || a.km - b.km)
+        items = items.slice(0, 300)
+      } else {
+        items = await lib.searchNearby({ lat: point.lat, lon: point.lon, km: dist, sel: q.sel, cuisine: q.cuisine, max: 300 })
+      }
       setLive({ status: 'done', items, where, label: q.label, km: dist, near: point.label })
       await finish(`Found ${items.length} ${q.label} near ${point.label}${dist ? ` (+${dist} km)` : ''}`)
       return items.length
@@ -741,6 +765,9 @@ export default function Dashboard({
                   <div className="leads-tools">
                     {isAdmin && !isDemo && !adding && (
                       <button className="btn btn-brass" onClick={() => setAdding(true)}>+ Add lead</button>
+                    )}
+                    {isAdmin && !isDemo && leads.length > 0 && (
+                      <ClearLeads clientId={client.id} service={service} count={leads.length} label={DEMO_TYPE_LABEL[service]} />
                     )}
                     <input type="search" placeholder="Search name, area, category" value={query}
                       onChange={(e) => setQuery(e.target.value)} aria-label="Search leads" />
@@ -1388,6 +1415,7 @@ function AgentBar({ client, service, isAdmin, isDemo, canSearch, searching, onSe
           area={(client.base_area || 'Al Khuwair').split(',')[0]}
           km={radius || 10}
           disabled={pending || searching}
+          audiences={AUDIENCE_NAMES}
           onPick={(q) => { setText(q); setError(''); startTransition(async () => { await onSearch(q) }) }}
         />
       )}
@@ -2083,7 +2111,7 @@ function LiveResults({ live, isDemo, service, clientId, onRetry, onClear, onSave
           : 'Tick the ones you want and save them as leads. Nothing is saved until you do.'}
       </p>
 
-      {live.status === 'loading' && <p className="empty">Finding the place and searching map listings...</p>}
+      {live.status === 'loading' && <p className="empty">{live.step || 'Finding the place and searching map listings...'}{live.items.length ? ` ${live.items.length} found so far.` : ''}</p>}
       {live.status === 'noplace' && (
         <p className="error">The map does not know that place name. Check the spelling, e.g. Al Khuwair, Qurum, Ghubrah, Bousher, Ruwi, Seeb, Al Mawaleh.</p>
       )}
@@ -2104,9 +2132,8 @@ function LiveResults({ live, isDemo, service, clientId, onRetry, onClear, onSave
                 <div className="live-main">
                   <a className="biz" href={b.mapUrl} target="_blank" rel="noreferrer">{b.name}</a>
                   <span className="sub">{b.type}{b.area ? `, ${b.area}` : ''}, {b.km < 1 ? `${Math.round(b.km * 1000)} m` : `${b.km.toFixed(1)} km`} away</span>
-                  {isDemo
-                    ? <span className="live-offer">Fit: {b.offer}</span>
-                    : (b.phone || b.email) && <span className="live-offer">{[b.phone, b.email].filter(Boolean).join(', ')}</span>}
+                  {(isDemo || b.audienceFor) && <span className="live-offer">{b.audienceFor ? 'Why they buy' : 'Fit'}: {b.offer}</span>}
+                  {!isDemo && (b.phone || b.email) && <span className="live-offer">{[b.phone, b.email].filter(Boolean).join(', ')}</span>}
                   {b.gaps.length > 0 && (
                     <span className="tags">{b.gaps.map((g) => <span key={g} className="tag tag-due">{g}</span>)}</span>
                   )}
@@ -2144,31 +2171,47 @@ function LiveResults({ live, isDemo, service, clientId, onRetry, onClear, onSave
   )
 }
 
-// Admin: example, one-tap niche searches, and a search for every niche at once
-const NICHE_LIST = [
-  'clinics', 'restaurants', 'cafes', 'gyms', 'schools', 'training centres', 'hotels', 'pharmacies',
-  'car businesses', 'supermarkets', 'bakeries', "men's barbers", 'travel agencies', 'furniture and interiors',
-  'printing and signage', 'real estate offices', 'offices', 'hospitals',
-]
+// Admin: one dropdown. Pick your client's niche, the agent finds the businesses that buy from it.
+const AUDIENCE_NAMES = ['travel agencies', 'rent a car', 'facility management and cleaning', 'printing and signage', 'IT and CCTV',
+  'corporate catering', 'training institutes', 'manpower and recruitment', 'pest control', 'office furniture']
 
-function SearchHelp({ area, km, disabled, onPick }) {
-  const q = (what) => `find ${what} near ${area} +${km} km`
+function SearchHelp({ area, km, disabled, onPick, audiences }) {
+  const [pick, setPick] = useState('')
+  const q = (what) => `find customers for ${what} near ${area} +${km} km`
   return (
     <div className="search-help">
-      <p className="sub">
-        Example: <button type="button" className="link-btn small" disabled={disabled} onClick={() => onPick(q('clinics'))}>{q('clinics')}</button>
-        {' '}You can also add a cuisine, e.g. "Pakistani restaurants".
-      </p>
-      <div className="niche-row" role="group" aria-label="Search a niche">
-        <button type="button" className="chip chip-all" disabled={disabled} onClick={() => onPick(q('everything'))}>
-          Auto search: all niches
-        </button>
-        {NICHE_LIST.map((n) => (
-          <button key={n} type="button" className="chip" disabled={disabled} onClick={() => onPick(q(n))}>{n}</button>
-        ))}
-      </div>
-      <p className="sub">Tap a niche to search it near {area} (+{km} km). Change the distance above, or type your own place.</p>
+      <label className="audience-pick">
+        <span className="sub">Find customers for</span>
+        <select value={pick} disabled={disabled} aria-label="Find customers for"
+          onChange={(e) => { const v = e.target.value; setPick(v); if (v) onPick(q(v)) }}>
+          <option value="">Choose a niche...</option>
+          {audiences.map((a) => <option key={a} value={a}>{a[0].toUpperCase() + a.slice(1)}</option>)}
+        </select>
+      </label>
+      <p className="sub">The agent searches every type of business that buys from this niche, within {km} km of {area}, and gives each lead its reason. You can still type your own search, e.g. "find hotels near Qurum +20 km".</p>
     </div>
+  )
+}
+
+// Admin: delete every lead in this service tab, with its messages and follow-ups
+function ClearLeads({ clientId, service, count, label }) {
+  const [asking, setAsking] = useState(false)
+  const [pending, startTransition] = useTransition()
+  const [error, setError] = useState('')
+  if (!asking) return <button className="btn btn-plain" onClick={() => setAsking(true)}>Clear all leads</button>
+  return (
+    <span className="clear-confirm" role="alert">
+      <span className="error">Delete all {count} {label.toLowerCase()} leads and their messages? This cannot be undone.</span>
+      <button className="btn btn-danger" disabled={pending}
+        onClick={() => startTransition(async () => {
+          const res = await clearLeads({ clientId, service })
+          if (res?.error) setError(res.error); else setAsking(false)
+        })}>
+        {pending ? 'Deleting...' : `Yes, delete ${count}`}
+      </button>
+      <button className="btn btn-plain" disabled={pending} onClick={() => setAsking(false)}>Cancel</button>
+      {error && <span className="error">{error}</span>}
+    </span>
   )
 }
 

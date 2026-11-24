@@ -812,3 +812,6 @@ textarea { width: 100%; resize: vertical; line-height: 1.6; }
 .chip-all { text-transform: none; font-weight: 700; color: var(--bg); background: var(--gold); border-color: var(--gold); }
 .chip-all:hover:not(:disabled) { color: var(--bg); background: var(--gold-bright); }
 .head-actions { display: inline-flex; gap: 0.5rem; flex-wrap: wrap; }
+.audience-pick { display: flex; flex-direction: column; gap: 0.3rem; max-width: 28rem; }
+.audience-pick select { width: 100%; }
+.clear-confirm { display: inline-flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
