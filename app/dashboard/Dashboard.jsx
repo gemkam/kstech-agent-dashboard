@@ -416,9 +416,9 @@ export default function Dashboard({
       setLive({ status: 'done', items, where, label: q.label, km: dist, near: point.label })
       await finish(`Found ${items.length} ${q.label} near ${point.label}${dist ? ` (+${dist} km)` : ''}`)
       return items.length
-    } catch {
-      setLive((l) => ({ ...l, status: 'error', items: [] }))
-      await finish('Search stopped: the map service was busy')
+    } catch (e) {
+      setLive((l) => ({ ...l, status: 'error', items: [], reason: String(e?.message || '').slice(0, 160) }))
+      await finish(`Search stopped: ${String(e?.message || 'the map service was busy').slice(0, 120)}`)
       return 0
     }
   }
@@ -636,6 +636,7 @@ export default function Dashboard({
             isAdmin={isAdmin}
             onOpen={setOpenId}
             onApproveAll={() => setEmailFor('all')}
+            onRejectAll={() => setEmailFor('rejectAll')}
             isDemo={isDemo}
             focus={focusOn('sec-approvals')}
           />
@@ -824,7 +825,7 @@ export default function Dashboard({
 
       {emailFor && (
         <EmailScreen
-          mode={emailFor === 'all' ? 'all' : 'single'}
+          mode={emailFor === 'all' || emailFor === 'rejectAll' ? emailFor : 'single'}
           lead={emailFor === 'all' ? null : leadById[emailFor]}
           leadOutreach={emailFor === 'all' ? [] : outreachByLead[emailFor] || []}
           drafts={drafts}
@@ -1394,16 +1395,21 @@ function AgentBar({ client, service, isAdmin, isDemo, canSearch, searching, onSe
   )
 }
 
-function Approvals({ drafts, approved, leadById, isAdmin, onOpen, onApproveAll, isDemo, focus }) {
+function Approvals({ drafts, approved, leadById, isAdmin, onOpen, onApproveAll, onRejectAll, isDemo, focus }) {
 
   return (
     <section id="sec-approvals" className={focus ? 'panel approvals focus' : 'panel approvals'} aria-label="Emails waiting for approval">
       <div className="panel-head">
         <h2>Waiting for your approval <span className="count">{drafts.length}</span></h2>
         {onePerLead(drafts).length > 1 && (
-          <button className="btn btn-quiet" onClick={onApproveAll}>
-            Approve all ({onePerLead(drafts).length})
-          </button>
+          <span className="head-actions">
+            <button className="btn btn-quiet" onClick={onApproveAll}>
+              Approve all ({onePerLead(drafts).length})
+            </button>
+            <button className="btn btn-plain" onClick={onRejectAll}>
+              Reject all ({onePerLead(drafts).length})
+            </button>
+          </span>
         )}
       </div>
       <p className="muted small">Nothing is sent until you approve it.{drafts.some((o) => o.language && o.language !== 'en') ? ' Where a message has two languages, approve the one you want; the other is cancelled.' : ''}</p>
@@ -2081,7 +2087,7 @@ function LiveResults({ live, isDemo, service, clientId, onRetry, onClear, onSave
       {live.status === 'noplace' && (
         <p className="error">The map does not know that place name. Check the spelling, e.g. Al Khuwair, Qurum, Ghubrah, Bousher, Ruwi, Seeb, Al Mawaleh.</p>
       )}
-      {live.status === 'error' && <p className="error">The live map search is busy right now. Try "Search again" in a moment.</p>}
+      {live.status === 'error' && <p className="error">The live map search is busy right now. Try "Search again" in a moment.{live.reason ? ` (${live.reason})` : ''}</p>}
       {live.status === 'done' && live.items.length === 0 && (
         <p className="empty">No listed {live.label || 'businesses'} found here. Try a bigger distance, e.g. +20 km.</p>
       )}
@@ -2394,6 +2400,7 @@ function EmailScreen({ mode, lead, leadOutreach, drafts, leadById, isDemo, demoS
   const history = leadOutreach.filter((o) => o.status !== 'draft')
   const allDrafts = onePerLead(drafts)
   const [view, setView] = useState(mode === 'all' ? 'all' : 'single')
+  const [confirmReject, setConfirmReject] = useState(mode === 'rejectAll')
   const [editing, setEditing] = useState(false)
   const [subject, setSubject] = useState(leadDraft?.subject || '')
   const [body, setBody] = useState(leadDraft?.message_draft || '')
@@ -2459,6 +2466,24 @@ function EmailScreen({ mode, lead, leadOutreach, drafts, leadById, isDemo, demoS
     onRefresh()
   }
 
+  // Reject every waiting message at once (both language versions), nothing is sent
+  async function rejectAll() {
+    setError('')
+    setBusy(true)
+    const names = allDrafts.map((o) => leadById[o.lead_id]?.business_name || 'Lead')
+    let failed = 0
+    for (const o of drafts) {
+      const res = await reviewOutreach({ id: o.id, action: 'reject' })
+      if (res?.error && res.error !== 'This email was already reviewed.') failed++
+    }
+    setBusy(false)
+    setConfirmReject(false)
+    if (failed) setError(`${failed} message${failed === 1 ? '' : 's'} could not be rejected. Refresh and try again.`)
+    setResult({ kind: 'rejectedAll', names })
+    setView('done')
+    onRefresh()
+  }
+
   async function askAgentToWrite() {
     setWriting(true)
     setError('')
@@ -2475,7 +2500,7 @@ function EmailScreen({ mode, lead, leadOutreach, drafts, leadById, isDemo, demoS
       <div className="mail" role="dialog" aria-modal="true" aria-label="Email" onClick={(e) => e.stopPropagation()}>
         <div className="mail-head">
           <h2>
-            {view === 'all' ? `Approve all messages (${allDrafts.length})`
+            {view === 'all' ? (confirmReject ? `Reject all messages (${allDrafts.length})` : `Approve all messages (${allDrafts.length})`)
               : view === 'sending' ? (isDemo ? 'Sending' : 'Approving')
               : view === 'done' ? 'Done'
               : `Email to ${lead?.business_name}`}
@@ -2529,9 +2554,14 @@ function EmailScreen({ mode, lead, leadOutreach, drafts, leadById, isDemo, demoS
                   {editing && <button className="btn btn-plain" onClick={() => { setEditing(false); setSubject(leadDraft.subject || ''); setBody(leadDraft.message_draft || '') }}>Cancel edit</button>}
                   <button className="btn btn-plain" onClick={reject} disabled={busy}>Reject</button>
                   {allDrafts.length > 1 && (
-                    <button className="link-btn small push-right" onClick={() => setView('all')} disabled={busy}>
-                      Approve all ({allDrafts.length})
-                    </button>
+                    <>
+                      <button className="link-btn small push-right" onClick={() => { setConfirmReject(false); setView('all') }} disabled={busy}>
+                        Approve all ({allDrafts.length})
+                      </button>
+                      <button className="link-btn small" onClick={() => { setConfirmReject(true); setView('all') }} disabled={busy}>
+                        Reject all ({allDrafts.length})
+                      </button>
+                    </>
                   )}
                 </div>
               </>
@@ -2581,12 +2611,25 @@ function EmailScreen({ mode, lead, leadOutreach, drafts, leadById, isDemo, demoS
               ))}
             </ul>
             {error && <p className="error">{error}</p>}
-            <div className="mail-actions">
-              <button className="btn btn-brass btn-lg" disabled={busy || allDrafts.length === 0} onClick={() => approveList(allDrafts, null)}>
-                {isDemo ? `Approve and send all ${allDrafts.length}` : `Approve all ${allDrafts.length}`}
-              </button>
-              {lead && <button className="btn btn-plain" onClick={() => setView('single')}>Back</button>}
-            </div>
+            {confirmReject ? (
+              <div className="mail-actions">
+                <p className="error" role="alert">Reject all {allDrafts.length} messages? None of them will be sent.</p>
+                <button className="btn btn-danger btn-lg" disabled={busy || drafts.length === 0} onClick={rejectAll}>
+                  {busy ? 'Rejecting...' : `Yes, reject all ${allDrafts.length}`}
+                </button>
+                <button className="btn btn-plain" disabled={busy} onClick={() => setConfirmReject(false)}>Cancel</button>
+              </div>
+            ) : (
+              <div className="mail-actions">
+                <button className="btn btn-brass btn-lg" disabled={busy || allDrafts.length === 0} onClick={() => approveList(allDrafts, null)}>
+                  {isDemo ? `Approve and send all ${allDrafts.length}` : `Approve all ${allDrafts.length}`}
+                </button>
+                <button className="btn btn-plain" disabled={busy || allDrafts.length === 0} onClick={() => setConfirmReject(true)}>
+                  Reject all {allDrafts.length}
+                </button>
+                {lead && <button className="btn btn-plain" onClick={() => setView('single')}>Back</button>}
+              </div>
+            )}
           </div>
         )}
 
@@ -2609,19 +2652,22 @@ function EmailScreen({ mode, lead, leadOutreach, drafts, leadById, isDemo, demoS
 
         {view === 'done' && result && (
           <div className="mail-body mail-center">
-            <span className={result.kind === 'rejected' ? 'done-mark done-mark-muted' : 'done-mark'} aria-hidden="true">
-              {result.kind === 'rejected' ? '×' : '✓'}
+            <span className={result.kind.startsWith('rejected') ? 'done-mark done-mark-muted' : 'done-mark'} aria-hidden="true">
+              {result.kind.startsWith('rejected') ? '×' : '✓'}
             </span>
             <p className="mail-status">
               {result.kind === 'sent' && `${result.names.length} email${result.names.length === 1 ? '' : 's'} sent`}
               {result.kind === 'approved' && `${result.names.length} email${result.names.length === 1 ? '' : 's'} approved`}
               {result.kind === 'rejected' && 'Email rejected'}
+              {result.kind === 'rejectedAll' && `${result.names.length} message${result.names.length === 1 ? '' : 's'} rejected`}
             </p>
             <p className="muted center">
               {result.kind === 'sent' && 'Replies will come to your inbox. The agent schedules a follow-up in 3 days for anyone who does not reply.'}
               {result.kind === 'approved' && 'Next step: send it from your own email. You will find it under "Approved, waiting for you to send" on your dashboard.'}
               {result.kind === 'rejected' && 'This email will not be sent. The agent will not contact this business unless you ask.'}
+              {result.kind === 'rejectedAll' && 'None of these messages will be sent. The approval list is now clear.'}
             </p>
+            {error && <p className="error">{error}</p>}
             <button className="btn btn-primary" onClick={onClose}>Back to dashboard</button>
           </div>
         )}

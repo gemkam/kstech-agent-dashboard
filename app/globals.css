@@ -811,3 +811,4 @@ textarea { width: 100%; resize: vertical; line-height: 1.6; }
 .chip:disabled { opacity: 0.5; cursor: default; }
 .chip-all { text-transform: none; font-weight: 700; color: var(--bg); background: var(--gold); border-color: var(--gold); }
 .chip-all:hover:not(:disabled) { color: var(--bg); background: var(--gold-bright); }
+.head-actions { display: inline-flex; gap: 0.5rem; flex-wrap: wrap; }
