@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { AUDIENCES, BUYER_TYPES, MAX_TYPES } from '@/lib/liveSearch'
+import { AUDIENCES, BUYER_TYPES, MAX_TYPES, PER_TYPE, PER_TYPE_OPTIONS } from '@/lib/liveSearch'
 import {
   addCompany,
   clearLeads,
@@ -424,8 +424,9 @@ export default function Dashboard({
       const where = fallback ? 'Al Khuwair, Muscat (location not shared)' : point.label
 
       // "Find customers for": 2 per buyer type (e.g. 4 types = 8 leads). Other searches: the number chosen.
-      const MIN_LEADS = q.targets ? q.targets.length * lib.PER_TYPE : leadsWanted
-      const enough = (list) => (q.targets ? lib.pickPerType(list).length : list.length) >= MIN_LEADS
+      const PER = q.per || lib.PER_TYPE
+      const MIN_LEADS = q.targets ? q.targets.length * PER : leadsWanted
+      const enough = (list) => (q.targets ? lib.pickPerType(list, PER).length : list.length) >= MIN_LEADS
       // Google Maps first when its key is set (fast, better coverage in Oman); the free map fills any gap
       const useGoogle = !isDemo && Boolean(q.targets) && await lib.googleAvailable()
       let gItems = null
@@ -517,10 +518,10 @@ export default function Dashboard({
       if (q.targets && !isDemo) {
         // EMAIL REQUIRED: per buyer type, check up to 6 businesses (best first) and keep the first 2 with a proper email.
         // If a type runs out, widen the distance and check new businesses.
-        const MAX_CHECKS = 6
+        const MAX_CHECKS = PER + 4 // a few spare tries per audience for businesses without a proper email
         const pool = items.map((b) => ({ ...b }))
         const checks = {}
-        const kept = () => q.targets.map((t) => pool.filter((b) => b.target === t.label && b.email).slice(0, lib.PER_TYPE))
+        const kept = () => q.targets.map((t) => pool.filter((b) => b.target === t.label && b.email).slice(0, PER))
         const keptCount = () => kept().flat().length
         const show = () => setLive((l) => ({ ...l, status: 'loading', items: kept().flat(),
           step: `Finding proper emails: ${keptCount()} of ${MIN_LEADS} leads ready (${Object.values(checks).reduce((a, n) => a + n, 0)} businesses checked)` }))
@@ -528,7 +529,7 @@ export default function Dashboard({
           const jobs = []
           for (const t of q.targets) {
             const have = pool.filter((b) => b.target === t.label && b.email).length
-            const need = lib.PER_TYPE - have
+            const need = PER - have
             if (need <= 0) continue
             const left = MAX_CHECKS - (checks[t.label] || 0)
             const cand = lib.pickPerType(pool.filter((b) => b.target === t.label && !b.checked), 99).slice(0, Math.min(left, need + 1))
@@ -557,7 +558,7 @@ export default function Dashboard({
         }
         items = kept().flat()
       } else {
-        items = q.targets ? lib.pickPerType(items) : items.slice(0, MIN_LEADS) // best matches first, as many as asked for
+        items = q.targets ? lib.pickPerType(items, PER) : items.slice(0, MIN_LEADS) // best matches first, as many as asked for
         // Other searches: look up emails for what was found, keep everything
         if (!signal.aborted && !isDemo && items.some((b) => !b.email)) {
           const list = items.map((b) => ({ ...b }))
@@ -2379,7 +2380,7 @@ function LiveResults({ live, isDemo, service, clientId, onRetry, onStop, clientN
       {live.status === 'error' && <p className="error">The live map search is busy right now. Try "Search again" in a moment.{live.reason ? ` (${live.reason})` : ''}</p>}
       {live.status === 'done' && live.expandedFrom != null && <p className="muted small">Fewer than {live.wanted} found within {live.expandedFrom} km, so the agent widened the search to {live.km} km.</p>}
       {live.status === 'done' && live.totalFound > live.items.length && <p className="muted small">{live.items.some((b) => b.audienceFor)
-        ? `Showing the best 2 for each type of buyer (${live.items.length} of ${live.totalFound} found), with phone and website first.`
+        ? `Showing the best for each type of buyer (${live.items.length} of ${live.totalFound} found), with phone and website first.`
         : `Showing the best ${live.items.length} of ${live.totalFound} found. Choose more leads per search to see more.`}</p>}
       {live.status === 'done' && !isDemo && live.items.some((b) => b.audienceFor) && live.items.length < live.wanted && (
         <p className="muted small">Only {live.items.length} of {live.wanted} leads have a proper email (named person or department, not info@ or contact@). Businesses without one were left out. Try a bigger distance or change a target audience.</p>
@@ -2450,9 +2451,10 @@ function SearchHelp({ area, km, disabled, onPick, audiences, niche, searching, o
   const presetFor = (n) => (AUDIENCES[n] || []).map(([c]) => c)
   const [types, setTypes] = useState(presetFor(audiences.includes(niche) ? niche : ''))
   const [adding, setAdding] = useState('')
+  const [per, setPer] = useState(PER_TYPE)
   useEffect(() => { const n = audiences.includes(niche) ? niche : ''; setPick(n); setTypes(presetFor(n)) }, [niche, audiences])
   const changed = pick && types.join('|') !== presetFor(pick).join('|')
-  const q = (what) => `find customers for ${what} near ${area} +${km} km${changed ? ` types: ${types.join('; ')}` : ''}`
+  const q = (what) => `find customers for ${what} near ${area} +${km} km per: ${per}${changed ? ` types: ${types.join('; ')}` : ''}`
   const cap = (t) => t[0].toUpperCase() + t.slice(1)
   return (
     <div className="search-help">
@@ -2466,7 +2468,7 @@ function SearchHelp({ area, km, disabled, onPick, audiences, niche, searching, o
       </label>
       {pick && (
         <div className="buyer-types" aria-label="Target audience">
-          <span className="sub">Target audience ({types.length} of {MAX_TYPES}, 2 leads each)</span>
+          <span className="sub">Target audience ({types.length} of {MAX_TYPES})</span>
           <div className="chips">
             {types.map((t) => (
               <span key={t} className="chip chip-on">
@@ -2488,13 +2490,21 @@ function SearchHelp({ area, km, disabled, onPick, audiences, niche, searching, o
           {changed && <button type="button" className="link-btn small" disabled={disabled} onClick={() => setTypes(presetFor(pick))}>Back to the default 4</button>}
         </div>
       )}
+      {pick && (
+        <label className="audience-pick">
+          <span className="sub">Leads per audience ({types.length * per} leads in total)</span>
+          <select value={per} disabled={disabled} onChange={(e) => setPer(Number(e.target.value))} aria-label="Leads per audience">
+            {PER_TYPE_OPTIONS.map((n) => <option key={n} value={n}>{n} per audience{n === PER_TYPE ? ' (best value)' : ''}</option>)}
+          </select>
+        </label>
+      )}
       <div className="search-buttons">
         <button type="button" className="btn btn-brass" disabled={disabled || !pick || !types.length} onClick={() => onPick(q(pick))}>
           {searching ? 'Searching...' : 'Start search'}
         </button>
         {searching && <button type="button" className="btn btn-stop" onClick={onStop}>Stop search</button>}
       </div>
-      <p className="sub">The agent finds the best 2 businesses for each target audience, within {km} km of {area} (wider if needed), and gives each lead its reason.</p>
+      <p className="sub">The agent finds the best {per} businesses with a proper email for each target audience, within {km} km of {area} (wider if needed), and gives each lead its reason.</p>
     </div>
   )
 }
