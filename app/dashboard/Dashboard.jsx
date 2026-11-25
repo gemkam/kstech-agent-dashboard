@@ -5,6 +5,9 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { AUDIENCES, BUYER_TYPES, MAX_TYPES, PER_TYPE, PER_TYPE_OPTIONS } from '@/lib/liveSearch'
 import {
+  getSeen,
+  markSeen,
+  forgetSeen,
   addCompany,
   clearLeads,
   updateLead,
@@ -424,6 +427,9 @@ export default function Dashboard({
       const where = fallback ? 'Al Khuwair, Muscat (location not shared)' : point.label
 
       // "Find customers for": 2 per buyer type (e.g. 4 types = 8 leads). Other searches: the number chosen.
+      // Fresh data every time: skip businesses this company has already been shown or saved
+      const seenKeys = new Set(!isDemo && isAdmin ? ((await getSeen({ clientId: client.id }))?.keys || []) : [])
+      const fresh = (list) => list.filter((b) => !seenKeys.has(lib.nameKey(b.name)))
       const PER = q.per || lib.PER_TYPE
       const MIN_LEADS = q.targets ? q.targets.length * PER : leadsWanted
       const enough = (list) => (q.targets ? lib.pickPerType(list, PER).length : list.length) >= MIN_LEADS
@@ -444,7 +450,12 @@ export default function Dashboard({
             const t = q.targets[next++]
             setLive((l) => ({ ...l, status: 'loading', step: `Google Maps: searching ${t.label} (${done} of ${q.targets.length} done)` }))
             try {
-              const found = await lib.searchGoogle({ q: `${t.label} in ${near}, Oman`, lat: point.lat, lon: point.lon, km: dist, label: t.label, signal })
+              let found = []
+              for (let page = 1; page <= 3 && !signal.aborted; page++) {
+                const got = fresh(await lib.searchGoogle({ q: `${t.label} in ${near}, Oman`, lat: point.lat, lon: point.lon, km: dist, label: t.label, signal, page }))
+                found.push(...got)
+                if (found.length >= PER + 4) break // enough new businesses for this audience; next page costs credits
+              }
               for (const b of found) {
                 if (out.some((x) => sameName(x.name) === sameName(b.name))) continue
                 out.push({ ...b, audienceFor: q.audience, offer: t.why, score: t.score, target: t.label })
@@ -484,13 +495,13 @@ export default function Dashboard({
           const found = await lib.searchNearby({ lat: point.lat, lon: point.lon, km: dist, sel, max: 2000, asType: 'Business', signal,
             onStatus: (msg) => setLive((l) => ({ ...l, step: msg })),
             onPartial: (part, done, total) => setLive((l) => ({ ...l, items: merge(gList, classify(part)), step: `${done} of ${total} free map searches done within ${dist} km, still searching` })) })
-          items = merge(gList, classify(found)).slice(0, 300)
+          items = merge(gList, fresh(classify(found))).slice(0, 300)
         } else {
-          items = await lib.searchNearby({ lat: point.lat, lon: point.lon, km: dist, sel: q.sel, cuisine: q.cuisine, max: 300, signal,
+          items = await lib.searchNearby({ lat: point.lat, lon: point.lon, km: dist, sel: q.sel, cuisine: q.cuisine, max: 600, signal,
             onStatus: (msg) => setLive((l) => ({ ...l, step: msg })),
             onPartial: (part) => setLive((l) => ({ ...l, items: part, step: `${part.length} found so far, still searching` })) })
         }
-        return items
+        return q.targets ? items : fresh(items)
       }
 
       // Bring the number of leads chosen (5 to 25): if fewer are found, widen the distance automatically up to 100 km
@@ -505,6 +516,7 @@ export default function Dashboard({
         if (more.length >= items.length) items = more
       }
       let totalFound = items.length
+      const remember = [] // businesses checked for email but not kept: remembered too, so they are not checked again
 
       const lookUp = async (b) => {
         try {
@@ -557,6 +569,7 @@ export default function Dashboard({
           totalFound = pool.length
         }
         items = kept().flat()
+        remember.push(...pool.filter((b) => b.checked))
       } else {
         items = q.targets ? lib.pickPerType(items, PER) : items.slice(0, MIN_LEADS) // best matches first, as many as asked for
         // Other searches: look up emails for what was found, keep everything
@@ -576,6 +589,7 @@ export default function Dashboard({
         }
       }
       const expanded = usedKm !== dist
+      if (!isDemo && isAdmin && !signal.aborted) await markSeen({ clientId: client.id, items: [...items, ...remember].map((b) => ({ name: b.name, email: b.email })) })
 
       const stopped = signal.aborted
       setLive({ status: 'done', items, where, label: q.label, km: usedKm, near: point.label, stopped, runId, searchLabel, expandedFrom: expanded ? dist : null, wanted: MIN_LEADS, totalFound, startedAt, endedAt: Date.now() })
@@ -1650,6 +1664,7 @@ function AgentBar({ client, service, isAdmin, isDemo, canSearch, searching, onSe
           km={radius || 5}
           disabled={pending || searching}
           audiences={AUDIENCE_NAMES}
+          clientId={client.id}
           niche={client.niche}
           searching={searching}
           onStop={onStop}
@@ -2446,12 +2461,14 @@ function LiveResults({ live, isDemo, service, clientId, onRetry, onStop, clientN
 // Admin: one dropdown. Pick your client's niche, the agent finds the businesses that buy from it.
 const AUDIENCE_NAMES = Object.keys(AUDIENCES)
 
-function SearchHelp({ area, km, disabled, onPick, audiences, niche, searching, onStop }) {
+function SearchHelp({ area, km, disabled, onPick, audiences, niche, searching, onStop, clientId }) {
   const [pick, setPick] = useState(audiences.includes(niche) ? niche : '')
   const presetFor = (n) => (AUDIENCES[n] || []).map(([c]) => c)
   const [types, setTypes] = useState(presetFor(audiences.includes(niche) ? niche : ''))
   const [adding, setAdding] = useState('')
   const [per, setPer] = useState(PER_TYPE)
+  const [forgetMsg, setForgetMsg] = useState('')
+  const [forgetAsk, setForgetAsk] = useState(false)
   useEffect(() => { const n = audiences.includes(niche) ? niche : ''; setPick(n); setTypes(presetFor(n)) }, [niche, audiences])
   const changed = pick && types.join('|') !== presetFor(pick).join('|')
   const q = (what) => `find customers for ${what} near ${area} +${km} km per: ${per}${changed ? ` types: ${types.join('; ')}` : ''}`
@@ -2504,6 +2521,19 @@ function SearchHelp({ area, km, disabled, onPick, audiences, niche, searching, o
         </button>
         {searching && <button type="button" className="btn btn-stop" onClick={onStop}>Stop search</button>}
       </div>
+      <p className="sub">
+        Every search brings new businesses: ones already shown, checked or saved are skipped.{' '}
+        {!forgetAsk
+          ? <button type="button" className="link-btn small" disabled={disabled} onClick={() => setForgetAsk(true)}>Start fresh</button>
+          : <>
+              <button type="button" className="link-btn small" disabled={disabled} onClick={async () => {
+                const r = await forgetSeen({ clientId }); setForgetAsk(false)
+                setForgetMsg(r?.error || `Done. ${r?.count ?? 0} searched businesses forgotten (saved leads are still skipped).`)
+              }}>Yes, forget searched businesses</button>{' '}
+              <button type="button" className="link-btn small" onClick={() => setForgetAsk(false)}>Cancel</button>
+            </>}
+        {forgetMsg && <span className="ok"> {forgetMsg}</span>}
+      </p>
       <p className="sub">The agent finds the best {per} businesses with a proper email for each target audience, within {km} km of {area} (wider if needed), and gives each lead its reason.</p>
     </div>
   )

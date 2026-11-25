@@ -367,6 +367,31 @@ function templateMessage({ service, name, type, area, hasWebsite, ref, lang }) {
   return `${intro} ${body}\n${link}\nCan I show you a few examples?`
 }
 
+// Businesses already searched for a company (shown before, checked, or saved as leads), so searches bring fresh ones
+const nameKey = (n) => String(n || '').toLowerCase().replace(/[^a-z0-9\u0600-\u06ff]/g, '').slice(0, 120)
+export async function getSeen({ clientId }) {
+  const supabase = createClient()
+  const [a, b] = await Promise.all([
+    supabase.from('seen_businesses').select('name_key').eq('client_id', clientId).limit(5000),
+    supabase.from('leads').select('business_name').eq('client_id', clientId).limit(5000),
+  ])
+  return { keys: [...new Set([...(a.data || []).map((r) => r.name_key), ...(b.data || []).map((r) => nameKey(r.business_name))])] }
+}
+export async function markSeen({ clientId, items }) {
+  const supabase = createClient()
+  const rows = (Array.isArray(items) ? items : []).slice(0, 500)
+    .map((b) => ({ client_id: clientId, name_key: nameKey(b.name), name: clean(b.name, 120), email: clean(b.email, 120) }))
+    .filter((r) => r.name_key)
+  if (!rows.length) return { ok: true }
+  const { error } = await supabase.from('seen_businesses').upsert(rows, { onConflict: 'client_id,name_key', ignoreDuplicates: true })
+  return error ? { error: 'Could not remember these businesses.' } : { ok: true }
+}
+export async function forgetSeen({ clientId }) {
+  const supabase = createClient()
+  const { error, count } = await supabase.from('seen_businesses').delete({ count: 'exact' }).eq('client_id', clientId)
+  return error ? { error: 'Only admins can do this.' } : { ok: true, count }
+}
+
 // Admin: delete all leads of one service for a real (not demo) client; messages and follow-ups go with them
 export async function clearLeads({ clientId, service }) {
   const supabase = createClient()
