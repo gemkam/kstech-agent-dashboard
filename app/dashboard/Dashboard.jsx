@@ -668,6 +668,16 @@ export default function Dashboard({
 
         {isDemo && viewStep === 1 && <DemoProfile kind={kind} name={client.name} description={client.description} place={place} radius={radius} />}
 
+        {/* live search results sit right under the search */}
+        {((isDemo && kind === 'leadgen' && show(2)) || (!isDemo && isAdmin)) && live.status !== 'idle' && (
+          <LiveResults live={live} isDemo={isDemo} service={service} clientId={client.id}
+            onRetry={() => runLiveSearch(place, radius, lastSearch.current)}
+            onStop={() => searchCtrl.current?.abort()}
+            clientName={client.name}
+            onClear={() => setLive({ status: 'idle', items: [], where: '' })}
+            onSaved={() => router.refresh()} />
+        )}
+
         {!isDemo && !setup.complete && (
           <a href="#sec-mailbox" className="setup-banner" role="status">
             <span className="setup-banner-dot" aria-hidden="true" />
@@ -704,15 +714,6 @@ export default function Dashboard({
             isDemo={isDemo}
             focus={focusOn('sec-approvals')}
           />
-        )}
-
-        {((isDemo && kind === 'leadgen' && show(2)) || (!isDemo && isAdmin)) && live.status !== 'idle' && (
-          <LiveResults live={live} isDemo={isDemo} service={service} clientId={client.id}
-            onRetry={() => runLiveSearch(place, radius, lastSearch.current)}
-            onStop={() => searchCtrl.current?.abort()}
-            clientName={client.name}
-            onClear={() => setLive({ status: 'idle', items: [], where: '' })}
-            onSaved={() => router.refresh()} />
         )}
 
         {show(2) && (
