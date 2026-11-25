@@ -708,297 +708,269 @@ export default function Dashboard({
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
-  return (
-    <div className="shell">
-      <header className="topbar">
-        <div className="brand">
-          <span className="brand-mark" aria-hidden="true">KS</span>
-          <span className="brand-name">KS Tech Leads</span>
+  const [tab, setTab] = useState('home')
+  useEffect(() => {
+    const h = window.location.hash.slice(1)
+    if (APP_TABS.some((t) => t.key === h)) setTab(h)
+  }, [])
+  function goTab(k) {
+    setTab(k)
+    try { window.history.replaceState(null, '', `#${k}`) } catch {}
+    window.scrollTo(0, 0)
+  }
+
+  // ---------- building blocks, shared by the demo page and the tabbed app ----------
+  const companyPicker = isAdmin ? (
+    <label className="client-switch">
+      <span className="sr-only">Viewing company</span>
+      <select value={client.slug} onChange={(e) => router.push(`/dashboard?client=${e.target.value}`)}>
+        {[...clients.filter((c) => !c.is_demo), ...clients.filter((c) => c.is_demo)
+          .sort((x, y) => SERVICE_KEYS.indexOf(x.demo_kind) - SERVICE_KEYS.indexOf(y.demo_kind))].map((c) => (
+          <option key={c.id} value={c.slug}>{companyLabel(c)}</option>
+        ))}
+      </select>
+    </label>
+  ) : demoClients.length > 1 ? (
+    <DemoSwitch clients={demoClients} current={client.slug} />
+  ) : (
+    <span className="client-name">{client.name}</span>
+  )
+
+  const reportData = { client, leads, outreach, followups, events, sentTotal, month: monthNumber(firstSentAt), today }
+
+  const serviceTabs = !isDemo && services.length > 1 && (
+    <ServiceTabs services={services} current={service} counts={serviceCounts}
+      onPick={(s) => { setService(s); setFilter('all'); setOpenId(null) }} />
+  )
+
+  const agentBar = (
+    <AgentBar
+      client={client}
+      leadsWanted={leadsWanted}
+      onLeadsWanted={isDemo ? null : setLeadsWanted}
+      service={isDemo ? kind : service}
+      isAdmin={isAdmin}
+      running={running}
+      step={anim ? anim.steps[anim.i] : latestRun?.current_step}
+      progress={anim ? (anim.i + 1) / anim.steps.length : null}
+      latestRun={latestRun}
+      place={isDemo ? place : null}
+      radius={radius}
+      radiusNote={radiusNote}
+      onRadius={changeRadius}
+      showRadius={!isDemo || kind === 'leadgen'}
+      isDemo={isDemo}
+      canSearch={(isAdmin && !isDemo) || (isDemo && kind === 'leadgen' && demoStep >= 2)}
+      searching={live.status === 'loading'}
+      onStop={() => searchCtrl.current?.abort()}
+      onSearch={(text) => { lastSearch.current = text; return runLiveSearch(place, radius, text) }}
+      calm={!isDemo}
+      focus={focusOn('sec-agent')}
+    />
+  )
+
+  const liveResults = ((isDemo && kind === 'leadgen' && show(2)) || (!isDemo && isAdmin)) && live.status !== 'idle' && (
+    <LiveResults live={live} isDemo={isDemo} service={service} clientId={client.id}
+      onRetry={() => runLiveSearch(place, radius, lastSearch.current)}
+      onStop={() => searchCtrl.current?.abort()}
+      clientName={client.name}
+      onClear={() => setLive({ status: 'idle', items: [], where: '' })}
+      onSaved={() => router.refresh()} />
+  )
+
+  const setupBanner = !isDemo && !setup.complete && (
+    <button type="button" className="setup-banner" role="status" onClick={() => goTab('settings')}>
+      <span className="setup-banner-dot" aria-hidden="true" />
+      <span>
+        <strong>Email setup {setup.done} of {setup.total} done.</strong>{' '}
+        Until it is finished, emails may land in spam. {isAdmin ? 'Open Settings to finish the checklist.' : 'KS Tech is completing it with you.'}
+      </span>
+    </button>
+  )
+
+  const summary = show(2) && (
+    <SummaryBar
+      outreach={outreach}
+      leads={leads}
+      dueCount={dueFollowups.length}
+      draftCount={drafts.length}
+      approvedCount={approved.length}
+      today={today}
+      labels={stageLabels}
+    />
+  )
+
+  const approvalsPanel = (
+    <Approvals
+      drafts={drafts}
+      approved={approved}
+      leadById={leadById}
+      isAdmin={isAdmin}
+      onOpen={setOpenId}
+      onApproveAll={() => setEmailFor('all')}
+      onRejectAll={() => setEmailFor('rejectAll')}
+      isDemo={isDemo}
+      focus={focusOn('sec-approvals')}
+    />
+  )
+
+  const pipeline = show(2) && (
+    <section id="sec-pipeline" className={focusOn('sec-pipeline') ? 'pipeline focus' : 'pipeline'} aria-label="Lead pipeline">
+      <div className="pipeline-head">
+        <div className="title-block">
+          <h1>{client.name}</h1>
+          {client.description && <p className="client-desc">{client.description}</p>}
         </div>
-        <div className="topbar-right">
-          {isAdmin ? (
-            <label className="client-switch">
-              <span className="sr-only">Viewing company</span>
-              <select value={client.slug} onChange={(e) => router.push(`/dashboard?client=${e.target.value}`)}>
-                {[...clients.filter((c) => !c.is_demo), ...clients.filter((c) => c.is_demo)
-                  .sort((x, y) => SERVICE_KEYS.indexOf(x.demo_kind) - SERVICE_KEYS.indexOf(y.demo_kind))].map((c) => (
-                  <option key={c.id} value={c.slug}>{companyLabel(c)}</option>
-                ))}
-              </select>
-            </label>
-          ) : demoClients.length > 1 ? (
-            <DemoSwitch clients={demoClients} current={client.slug} />
-          ) : (
-            <span className="client-name">{client.name}</span>
+        <div className="pipeline-meta">
+          <p className="muted">
+            {messagesSent} messages sent
+            {dueFollowups.length > 0 && <> and {dueFollowups.length} follow-up{dueFollowups.length === 1 ? '' : 's'} due</>}
+          </p>
+          {isDemo
+            ? <ReportButton data={reportData} />
+            : <button type="button" className="btn btn-quiet" onClick={() => goTab('reports')}>Open reports</button>}
+        </div>
+      </div>
+      <ol className="stages">
+        {stages.map((s, i) => {
+          const prev = i === 0 ? null : stages[i - 1].count
+          return (
+            <li key={s.key} className="stage">
+              <span className="stage-count">{isDemo ? <AnimatedNumber value={s.count} /> : s.count}</span>
+              <span className="stage-label">{s.label}</span>
+              <span className="stage-track" aria-hidden="true">
+                <span className="stage-fill" style={{ width: `${Math.max(pct(s.count, stages[0].count), s.count ? 4 : 0)}%` }} />
+              </span>
+              {prev !== null && <span className="stage-rate">{pct(s.count, prev)}% of previous step</span>}
+            </li>
+          )
+        })}
+      </ol>
+    </section>
+  )
+
+  const activityPanel = (
+    <section id="sec-activity" className={focusOn('sec-activity') ? 'panel focus' : 'panel'} aria-label="Agent activity">
+      <h2>Agent activity</h2>
+      {events.length === 0 ? (
+        <p className="empty">The agent's work appears here: searches, drafts, approvals and replies.</p>
+      ) : (
+        <ul className="timeline">
+          {events.map((e) => (
+            <li key={e.id} className={`tl tl-${e.kind}`}>
+              <span className="tl-dot" aria-hidden="true" />
+              <span className="tl-msg">{e.message}</span>
+              <span className="tl-time">{timeAgo(e.created_at)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+
+  const mailboxPanel = <MailboxPanel key={`mb-${client.id}`} clientId={client.id} mailbox={mailbox} isAdmin={isAdmin} isDemo={isDemo} />
+
+  const followupsPanel = show(5) && (
+    <section className="panel" aria-label="Follow-ups due">
+      <h2>Follow-ups due</h2>
+      {dueFollowups.length === 0 ? (
+        <p className="empty">Nothing due today. {FOLLOWUP_DAYS} days after an email is sent, a follow-up appears here if the business has not replied.</p>
+      ) : (
+        <ul className="fu-list">
+          {dueFollowups.map((f) => {
+            const lead = leadById[f.lead_id]
+            const overdue = f.due_date < today
+            return (
+              <li key={f.id} className="fu-row">
+                <button className="fu-item" onClick={() => setOpenId(f.lead_id)}>
+                  <span className="fu-name">{lead?.business_name || 'Lead'}</span>
+                  <span className={overdue ? 'fu-date overdue' : 'fu-date'}>
+                    {overdue ? `Overdue since ${fmtDate(f.due_date)}` : 'Due today'}
+                  </span>
+                </button>
+                {!isDemo && <FollowupDone id={f.id} />}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </section>
+  )
+
+  const leadsPanel = (
+    <section id="sec-leads" className={focusOn('sec-leads') ? 'panel leads focus' : 'panel leads'} aria-label="Leads">
+      <div className="leads-head">
+        <h2>Leads <span className="count">{visibleLeads.length}</span></h2>
+        <div className="leads-tools">
+          {isAdmin && !isDemo && !adding && (
+            <button className="btn btn-brass" onClick={() => setAdding(true)}>+ Add lead</button>
           )}
-          <ThemeToggle />
-          {isAdmin && <AddCompany />}
-          {isAdmin && <Link href="/admin" className="btn btn-ghost">Users</Link>}
-          {!isDemo && <Link href="/account" className="btn btn-ghost" title="Change password">Account</Link>}
-          <form action={signOut}>
-            <button className="btn btn-ghost" type="submit" title={userEmail}>Sign out</button>
-          </form>
+          {isAdmin && !isDemo && allLeads.length > 0 && (
+            <ClearLeads clientId={client.id} service={service} count={leads.length} label={DEMO_TYPE_LABEL[service]} />
+          )}
+          <input type="search" placeholder="Search name, area, category" value={query}
+            onChange={(e) => setQuery(e.target.value)} aria-label="Search leads" />
+          <select value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter by status">
+            <option value="all">All statuses ({leads.length})</option>
+            {STATUS_ORDER.filter((s) => statusCounts[s]).map((s) => (
+              <option key={s} value={s}>{STATUS[s]} ({statusCounts[s]})</option>
+            ))}
+            {dueLeadIds.size > 0 && <option value="due">Follow-up due ({dueLeadIds.size})</option>}
+            {dupCount > 0 && <option value="dup">Possible duplicates ({dupCount})</option>}
+            {dncCount > 0 && <option value="dnc">Do not contact ({dncCount})</option>}
+          </select>
         </div>
-        <SentCounter key={`c-${client.id}`} total={sentTotal} firstSentAt={firstSentAt} />
-        <StatusBadge key={client.id} isDemo={isDemo} />
-      </header>
+      </div>
 
-      <main className="content">
-        {isDemo && (
-          <DemoGuide
-            config={DEMO}
-            typeLabel={DEMO_TYPE_LABEL[kind]}
-            step={demoStep}
-            viewStep={viewStep}
-            onPick={pickStep}
-            busy={Boolean(anim)}
-            onNext={runDemoStep}
-            error={demoError}
-            draftsLeft={drafts.length}
-          />
-        )}
+      {adding && (
+        <AddLeadForm clientId={client.id} service={service} onOpenLead={setOpenId}
+          onDone={(id) => { setAdding(false); if (id) setOpenId(id) }} />
+      )}
 
-        {!isDemo && services.length > 1 && (
-          <ServiceTabs services={services} current={service} counts={serviceCounts}
-            onPick={(s) => { setService(s); setFilter('all'); setOpenId(null) }} />
-        )}
+      {visibleLeads.length === 0 ? (
+        <p className="empty">
+          {leads.length === 0
+            ? (isDemo ? 'No leads yet. Your first researched businesses will appear here.' : 'No leads yet. Go to Find customers to run a search.')
+            : 'No leads match this search. Clear the search or pick another status.'}
+        </p>
+      ) : (
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th scope="col">Business</th>
+                <th scope="col">Why it fits</th>
+                <th scope="col">Status</th>
+                <th scope="col" className="num">Score</th>
+                <th scope="col">Last contact</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleLeads.map((l) => (
+                <tr key={l.id} onClick={() => setOpenId(l.id)} tabIndex={0}
+                  className={l.do_not_contact ? 'row-dnc' : undefined}
+                  onKeyDown={(e) => { if (e.key === 'Enter') setOpenId(l.id) }}>
+                  <td>
+                    <span className="biz">{l.business_name}</span>
+                    <span className="sub">{l.area}{l.category ? `, ${l.category.replace(/_/g, ' ')}` : ''}</span>
+                    <LeadTags lead={l} dueToday={dueLeadIds.has(l.id)} dupOf={l.duplicate_of ? leadById[l.duplicate_of] : null} isAdmin={isAdmin} />
+                    <WhyLead lead={l} />
+                  </td>
+                  <td>{l.problem_found || <span className="sub">General fit</span>}</td>
+                  <td><span className={`pill pill-${l.status}`}>{STATUS[l.status] || l.status}</span></td>
+                  <td className="num">{l.score ?? ''}</td>
+                  <td>{fmtDate(lastContact(l.id)) || <span className="sub">Not yet</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  )
 
-        <AgentBar
-          client={client}
-          leadsWanted={leadsWanted}
-          onLeadsWanted={isDemo ? null : setLeadsWanted}
-          service={isDemo ? kind : service}
-          isAdmin={isAdmin}
-          running={running}
-          step={anim ? anim.steps[anim.i] : latestRun?.current_step}
-          progress={anim ? (anim.i + 1) / anim.steps.length : null}
-          latestRun={latestRun}
-          place={isDemo ? place : null}
-          radius={radius}
-          radiusNote={radiusNote}
-          onRadius={changeRadius}
-          showRadius={!isDemo || kind === 'leadgen'}
-          isDemo={isDemo}
-          canSearch={(isAdmin && !isDemo) || (isDemo && kind === 'leadgen' && demoStep >= 2)}
-          searching={live.status === 'loading'}
-          onStop={() => searchCtrl.current?.abort()}
-          onSearch={(text) => { lastSearch.current = text; return runLiveSearch(place, radius, text) }}
-          calm={!isDemo}
-          focus={focusOn('sec-agent')}
-        />
-
-        {isDemo && demoStep === 7 && !anim && <DemoPrices kind={kind} />}
-
-        {isDemo && viewStep === 1 && <DemoProfile kind={kind} name={client.name} description={client.description} place={place} radius={radius} />}
-
-        {/* live search results sit right under the search */}
-        {((isDemo && kind === 'leadgen' && show(2)) || (!isDemo && isAdmin)) && live.status !== 'idle' && (
-          <LiveResults live={live} isDemo={isDemo} service={service} clientId={client.id}
-            onRetry={() => runLiveSearch(place, radius, lastSearch.current)}
-            onStop={() => searchCtrl.current?.abort()}
-            clientName={client.name}
-            onClear={() => setLive({ status: 'idle', items: [], where: '' })}
-            onSaved={() => router.refresh()} />
-        )}
-
-        {!isDemo && !setup.complete && (
-          <a href="#sec-mailbox" className="setup-banner" role="status">
-            <span className="setup-banner-dot" aria-hidden="true" />
-            <span>
-              <strong>Email setup {setup.done} of {setup.total} done.</strong>{' '}
-              Until it is finished, emails may land in spam. {isAdmin ? 'Finish the checklist.' : 'KS Tech is completing it with you.'}
-            </span>
-          </a>
-        )}
-
-        {show(2) && (
-          <SummaryBar
-            outreach={outreach}
-            leads={leads}
-            dueCount={dueFollowups.length}
-            draftCount={drafts.length}
-            approvedCount={approved.length}
-            today={today}
-            labels={stageLabels}
-          />
-        )}
-
-        {!isDemo && <SearchReports leads={allLeads} outreach={allOutreach} clientName={client.name} />}
-
-        {show(3) && (drafts.length > 0 || approved.length > 0 || isDemo) && (
-          <Approvals
-            drafts={drafts}
-            approved={approved}
-            leadById={leadById}
-            isAdmin={isAdmin}
-            onOpen={setOpenId}
-            onApproveAll={() => setEmailFor('all')}
-            onRejectAll={() => setEmailFor('rejectAll')}
-            isDemo={isDemo}
-            focus={focusOn('sec-approvals')}
-          />
-        )}
-
-        {show(2) && (
-          <section id="sec-pipeline" className={focusOn('sec-pipeline') ? 'pipeline focus' : 'pipeline'} aria-label="Lead pipeline">
-            <div className="pipeline-head">
-              <div className="title-block">
-                <h1>{client.name}</h1>
-                {client.description && <p className="client-desc">{client.description}</p>}
-              </div>
-              <div className="pipeline-meta">
-                <p className="muted">
-                  {messagesSent} messages sent
-                  {dueFollowups.length > 0 && <> and {dueFollowups.length} follow-up{dueFollowups.length === 1 ? '' : 's'} due</>}
-                </p>
-                <ReportButton
-                  data={{ client, leads, outreach, followups, events, sentTotal, month: monthNumber(firstSentAt), today }}
-                />
-              </div>
-            </div>
-            <ol className="stages">
-              {stages.map((s, i) => {
-                const prev = i === 0 ? null : stages[i - 1].count
-                return (
-                  <li key={s.key} className="stage">
-                    <span className="stage-count">{isDemo ? <AnimatedNumber value={s.count} /> : s.count}</span>
-                    <span className="stage-label">{s.label}</span>
-                    <span className="stage-track" aria-hidden="true">
-                      <span className="stage-fill" style={{ width: `${Math.max(pct(s.count, stages[0].count), s.count ? 4 : 0)}%` }} />
-                    </span>
-                    {prev !== null && <span className="stage-rate">{pct(s.count, prev)}% of previous step</span>}
-                  </li>
-                )
-              })}
-            </ol>
-          </section>
-        )}
-
-        {show(2) && (
-          <div className="grid">
-            <div className="side">
-              <section id="sec-activity" className={focusOn('sec-activity') ? 'panel focus' : 'panel'} aria-label="Agent activity">
-                <h2>Agent activity</h2>
-                {events.length === 0 ? (
-                  <p className="empty">The agent's work appears here: searches, drafts, approvals and replies.</p>
-                ) : (
-                  <ul className="timeline">
-                    {events.map((e) => (
-                      <li key={e.id} className={`tl tl-${e.kind}`}>
-                        <span className="tl-dot" aria-hidden="true" />
-                        <span className="tl-msg">{e.message}</span>
-                        <span className="tl-time">{timeAgo(e.created_at)}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </section>
-
-              <MailboxPanel key={`mb-${client.id}`} clientId={client.id} mailbox={mailbox} isAdmin={isAdmin} isDemo={isDemo} />
-
-              {show(5) && (
-                <section className="panel" aria-label="Follow-ups due">
-                  <h2>Follow-ups due</h2>
-                  {dueFollowups.length === 0 ? (
-                    <p className="empty">Nothing due today. {FOLLOWUP_DAYS} days after an email is sent, a follow-up appears here if the business has not replied.</p>
-                  ) : (
-                    <ul className="fu-list">
-                      {dueFollowups.map((f) => {
-                        const lead = leadById[f.lead_id]
-                        const overdue = f.due_date < today
-                        return (
-                          <li key={f.id} className="fu-row">
-                            <button className="fu-item" onClick={() => setOpenId(f.lead_id)}>
-                              <span className="fu-name">{lead?.business_name || 'Lead'}</span>
-                              <span className={overdue ? 'fu-date overdue' : 'fu-date'}>
-                                {overdue ? `Overdue since ${fmtDate(f.due_date)}` : 'Due today'}
-                              </span>
-                            </button>
-                            {!isDemo && <FollowupDone id={f.id} />}
-                          </li>
-                        )
-                      })}
-                    </ul>
-                  )}
-                </section>
-              )}
-            </div>
-
-            <div className="main-col">
-              <section id="sec-leads" className={focusOn('sec-leads') ? 'panel leads focus' : 'panel leads'} aria-label="Leads">
-                <div className="leads-head">
-                  <h2>Leads <span className="count">{visibleLeads.length}</span></h2>
-                  <div className="leads-tools">
-                    {isAdmin && !isDemo && !adding && (
-                      <button className="btn btn-brass" onClick={() => setAdding(true)}>+ Add lead</button>
-                    )}
-                    {isAdmin && !isDemo && allLeads.length > 0 && (
-                      <ClearLeads clientId={client.id} service={service} count={leads.length} label={DEMO_TYPE_LABEL[service]} />
-                    )}
-                    <input type="search" placeholder="Search name, area, category" value={query}
-                      onChange={(e) => setQuery(e.target.value)} aria-label="Search leads" />
-                    <select value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter by status">
-                      <option value="all">All statuses ({leads.length})</option>
-                      {STATUS_ORDER.filter((s) => statusCounts[s]).map((s) => (
-                        <option key={s} value={s}>{STATUS[s]} ({statusCounts[s]})</option>
-                      ))}
-                      {dueLeadIds.size > 0 && <option value="due">Follow-up due ({dueLeadIds.size})</option>}
-                      {dupCount > 0 && <option value="dup">Possible duplicates ({dupCount})</option>}
-                      {dncCount > 0 && <option value="dnc">Do not contact ({dncCount})</option>}
-                    </select>
-                  </div>
-                </div>
-
-                {adding && (
-                  <AddLeadForm clientId={client.id} service={service} onOpenLead={setOpenId}
-                    onDone={(id) => { setAdding(false); if (id) setOpenId(id) }} />
-                )}
-
-                {visibleLeads.length === 0 ? (
-                  <p className="empty">
-                    {leads.length === 0
-                      ? 'No leads yet. Your first researched businesses will appear here.'
-                      : 'No leads match this search. Clear the search or pick another status.'}
-                  </p>
-                ) : (
-                  <div className="table-wrap">
-                    <table className="table">
-                      <thead>
-                        <tr>
-                          <th scope="col">Business</th>
-                          <th scope="col">Why it fits</th>
-                          <th scope="col">Status</th>
-                          <th scope="col" className="num">Score</th>
-                          <th scope="col">Last contact</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {visibleLeads.map((l) => (
-                          <tr key={l.id} onClick={() => setOpenId(l.id)} tabIndex={0}
-                            className={l.do_not_contact ? 'row-dnc' : undefined}
-                            onKeyDown={(e) => { if (e.key === 'Enter') setOpenId(l.id) }}>
-                            <td>
-                              <span className="biz">{l.business_name}</span>
-                              <span className="sub">{l.area}{l.category ? `, ${l.category.replace(/_/g, ' ')}` : ''}</span>
-                              <LeadTags lead={l} dueToday={dueLeadIds.has(l.id)} dupOf={l.duplicate_of ? leadById[l.duplicate_of] : null} isAdmin={isAdmin} />
-                              <WhyLead lead={l} />
-                            </td>
-                            <td>{l.problem_found || <span className="sub">General fit</span>}</td>
-                            <td><span className={`pill pill-${l.status}`}>{STATUS[l.status] || l.status}</span></td>
-                            <td className="num">{l.score ?? ''}</td>
-                            <td>{fmtDate(lastContact(l.id)) || <span className="sub">Not yet</span>}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </section>
-            </div>
-          </div>
-        )}
-      </main>
-
+  const overlays = (
+    <>
       {openLead && (
         <LeadPanel
           key={openLead.id}
@@ -1031,9 +1003,252 @@ export default function Dashboard({
           onRefresh={() => router.refresh()}
         />
       )}
+    </>
+  )
+
+  // ---------- demo: one guided page, same order as before ----------
+  if (isDemo) {
+    return (
+      <div className="shell">
+        <header className="topbar">
+          <div className="brand">
+            <span className="brand-mark" aria-hidden="true">KS</span>
+            <span className="brand-name">KS Tech Leads</span>
+          </div>
+          <div className="topbar-right">
+            {companyPicker}
+            <ThemeToggle />
+            <form action={signOut}>
+              <button className="btn btn-ghost" type="submit" title={userEmail}>Sign out</button>
+            </form>
+          </div>
+          <SentCounter key={`c-${client.id}`} total={sentTotal} firstSentAt={firstSentAt} />
+          <StatusBadge key={client.id} isDemo={isDemo} />
+        </header>
+
+        <main className="content">
+          <DemoGuide
+            config={DEMO}
+            typeLabel={DEMO_TYPE_LABEL[kind]}
+            step={demoStep}
+            viewStep={viewStep}
+            onPick={pickStep}
+            busy={Boolean(anim)}
+            onNext={runDemoStep}
+            error={demoError}
+            draftsLeft={drafts.length}
+          />
+          {agentBar}
+          {demoStep === 7 && !anim && <DemoPrices kind={kind} />}
+          {viewStep === 1 && <DemoProfile kind={kind} name={client.name} description={client.description} place={place} radius={radius} />}
+          {liveResults}
+          {summary}
+          {show(3) && approvalsPanel}
+          {pipeline}
+          {show(2) && (
+            <div className="grid">
+              <div className="side">
+                {activityPanel}
+                {mailboxPanel}
+                {followupsPanel}
+              </div>
+              <div className="main-col">{leadsPanel}</div>
+            </div>
+          )}
+        </main>
+        {overlays}
+      </div>
+    )
+  }
+
+  // ---------- real companies: clear sections with their own menu ----------
+  const searching = live.status === 'loading'
+  const badgeFor = (key) => {
+    if (key === 'approvals') return drafts.length || null
+    if (key === 'home') return dueFollowups.length || null
+    return null
+  }
+  const current = APP_TABS.find((t) => t.key === tab) || APP_TABS[0]
+
+  const navItems = (cls) => APP_TABS.map((t) => {
+    const n = badgeFor(t.key)
+    return (
+      <button key={t.key} type="button" className={tab === t.key ? `${cls} on` : cls}
+        aria-current={tab === t.key ? 'page' : undefined} onClick={() => goTab(t.key)}>
+        <NavIcon name={t.key} />
+        <span className="nav-label">{t.short && cls === 'tab-item' ? t.short : t.label}</span>
+        {n ? <span className="nav-badge">{n}</span> : null}
+        {t.key === 'find' && searching && tab !== 'find' && <span className="nav-live" aria-label="Search running" />}
+      </button>
+    )
+  })
+
+  return (
+    <div className="app">
+      <aside className="side-nav" aria-label="Main menu">
+        <div className="brand">
+          <span className="brand-mark" aria-hidden="true">KS</span>
+          <span className="brand-name">KS Tech Leads</span>
+        </div>
+        <div className="side-company">
+          <span className="side-caption">Company</span>
+          {companyPicker}
+        </div>
+        <nav className="nav">{navItems('nav-item')}</nav>
+        <div className="side-foot">
+          <ThemeToggle labeled />
+          <form action={signOut}>
+            <button className="nav-item" type="submit" title={userEmail}>
+              <NavIcon name="out" /><span className="nav-label">Sign out</span>
+            </button>
+          </form>
+        </div>
+      </aside>
+
+      <div className="app-main">
+        <header className="app-top">
+          <span className="brand-mark mobile-only" aria-hidden="true">KS</span>
+          <div className="app-top-title">
+            <h1 className="page-title">{current.label}</h1>
+            <p className="sub desktop-only">{current.hint}</p>
+          </div>
+          <div className="app-top-right">
+            <SentCounter key={`c-${client.id}`} total={sentTotal} firstSentAt={firstSentAt} />
+            <StatusBadge key={client.id} isDemo={false} />
+            <span className="mobile-only"><ThemeToggle /></span>
+          </div>
+        </header>
+
+        <main className="content">
+          <div className="mobile-only mobile-company">{companyPicker}</div>
+          {serviceTabs}
+
+          {tab === 'home' && (
+            <>
+              {setupBanner}
+              {summary}
+              {pipeline}
+              <div className="grid-2">
+                {followupsPanel}
+                {activityPanel}
+              </div>
+            </>
+          )}
+
+          {tab === 'find' && (
+            <>
+              {isAdmin ? agentBar : (
+                <section className="panel"><p className="empty">KS Tech runs the searches for you. New leads appear under Leads and new messages under Approvals.</p></section>
+              )}
+              {liveResults}
+            </>
+          )}
+
+          {tab === 'approvals' && approvalsPanel}
+
+          {tab === 'leads' && leadsPanel}
+
+          {tab === 'reports' && (
+            <ReportsPage reportData={reportData} live={live} clientName={client.name} leads={allLeads} outreach={allOutreach}
+              onFind={() => goTab('find')} />
+          )}
+
+          {tab === 'settings' && (
+            <div className="settings">
+              <section className="panel">
+                <h2>Appearance</h2>
+                <p className="muted small">Choose light or dark. It is remembered on this device.</p>
+                <div className="settings-row"><ThemeToggle labeled /></div>
+              </section>
+              {mailboxPanel}
+              <section className="panel">
+                <h2>Account</h2>
+                <div className="settings-row">
+                  {isAdmin && <AddCompany />}
+                  {isAdmin && <Link href="/admin" className="btn btn-ghost">Users</Link>}
+                  <Link href="/account" className="btn btn-ghost">Change password</Link>
+                  <form action={signOut}>
+                    <button className="btn btn-ghost" type="submit">Sign out</button>
+                  </form>
+                </div>
+                <p className="sub">Signed in as {userEmail}</p>
+              </section>
+            </div>
+          )}
+        </main>
+      </div>
+
+      <nav className="tab-bar" aria-label="Main menu">{navItems('tab-item')}</nav>
+      {overlays}
     </div>
   )
 }
+
+const APP_TABS = [
+  { key: 'home', label: 'Overview', short: 'Home', hint: 'This month at a glance: pipeline, follow-ups and agent activity' },
+  { key: 'find', label: 'Find customers', short: 'Find', hint: 'Choose a niche, area and distance, then start a search' },
+  { key: 'approvals', label: 'Approvals', short: 'Approve', hint: 'Check messages before anything is sent' },
+  { key: 'leads', label: 'Leads', hint: 'Every saved business, with status and last contact' },
+  { key: 'reports', label: 'Reports', hint: 'All PDF reports in one place' },
+  { key: 'settings', label: 'Settings', short: 'Settings', hint: 'Email setup, companies, users and appearance' },
+]
+
+function NavIcon({ name }) {
+  const p = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }
+  const paths = {
+    home: <><path {...p} d="M3 11l9-7 9 7" /><path {...p} d="M5 10v10h14V10" /></>,
+    find: <><circle {...p} cx="11" cy="11" r="6.5" /><path {...p} d="M20 20l-4.2-4.2" /></>,
+    approvals: <><path {...p} d="M4 5h16v14H4z" /><path {...p} d="M8 12l3 3 5-6" /></>,
+    leads: <><path {...p} d="M8 6h12M8 12h12M8 18h12" /><circle cx="4" cy="6" r="1.3" fill="currentColor" /><circle cx="4" cy="12" r="1.3" fill="currentColor" /><circle cx="4" cy="18" r="1.3" fill="currentColor" /></>,
+    reports: <><path {...p} d="M6 3h9l4 4v14H6z" /><path {...p} d="M10 17v-4M13 17v-7M16 17v-2" /></>,
+    settings: <><circle {...p} cx="12" cy="12" r="3" /><path {...p} d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" /></>,
+    out: <><path {...p} d="M15 4h4v16h-4" /><path {...p} d="M10 8l-4 4 4 4M6 12h10" /></>,
+  }
+  return <svg className="nav-icon" viewBox="0 0 24 24" aria-hidden="true">{paths[name]}</svg>
+}
+
+// Reports tab: every PDF in one place
+function ReportsPage({ reportData, live, clientName, leads, outreach, onFind }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  async function resultsPdf() {
+    setBusy(true)
+    setError('')
+    try {
+      const { downloadSearchResults } = await import('@/lib/searchReport')
+      await downloadSearchResults({ live, clientName })
+    } catch { setError('Could not create the PDF. Try again.') }
+    setBusy(false)
+  }
+  const hasResults = live.items.length > 0 && live.status !== 'loading'
+  return (
+    <div className="reports">
+      <div className="report-cards">
+        <section className="panel report-card">
+          <span className="report-kicker">Company report</span>
+          <h2>{clientName}</h2>
+          <p className="muted small">Pipeline, messages sent, replies, follow-ups and agent activity for this month.</p>
+          <ReportButton data={reportData} />
+        </section>
+        <section className="panel report-card">
+          <span className="report-kicker">Latest search results</span>
+          <h2>{hasResults ? `${live.items.length} businesses` : 'No search yet'}</h2>
+          <p className="muted small">
+            {hasResults
+              ? `${live.label || 'Businesses'} near ${live.where}, with phone, WhatsApp, email and website.`
+              : 'Run a search to download its results with phone, WhatsApp, email and website.'}
+          </p>
+          {hasResults
+            ? <button className="btn btn-quiet" disabled={busy} onClick={resultsPdf}>{busy ? 'Creating PDF...' : 'Download results (PDF)'}</button>
+            : <button className="btn btn-quiet" onClick={onFind}>Go to Find customers</button>}
+          {error && <p className="error">{error}</p>}
+        </section>
+      </div>
+      <SearchReports leads={leads} outreach={outreach} clientName={clientName} showEmpty />
+    </div>
+  )
+}
+
 
 function LiveBadge() {
   const [online, setOnline] = useState(true)
@@ -1088,10 +1303,10 @@ function SummaryBar({ outreach, leads, dueCount, draftCount, approvedCount, toda
 }
 
 // Light / dark switch, remembered on this device
-function ThemeToggle() {
-  const [theme, setTheme] = useState('dark')
+function ThemeToggle({ labeled = false }) {
+  const [theme, setTheme] = useState('light')
   useEffect(() => {
-    try { setTheme(localStorage.getItem('ks-theme') || 'dark') } catch {}
+    try { setTheme(localStorage.getItem('ks-theme') || 'light') } catch {}
   }, [])
   function toggle() {
     const next = theme === 'dark' ? 'light' : 'dark'
@@ -1099,13 +1314,20 @@ function ThemeToggle() {
     document.documentElement.setAttribute('data-theme', next)
     try { localStorage.setItem('ks-theme', next) } catch {}
   }
+  const sun = <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5" fill="none" stroke="currentColor" strokeWidth="2" /><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
+  const moon = <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" /></svg>
+  const label = theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'
+  if (labeled) {
+    return (
+      <button type="button" className="mode-switch" onClick={toggle} aria-label={label} aria-pressed={theme === 'dark'}>
+        <span className={theme === 'light' ? 'mode-opt on' : 'mode-opt'}>{sun} Light</span>
+        <span className={theme === 'dark' ? 'mode-opt on' : 'mode-opt'}>{moon} Dark</span>
+      </button>
+    )
+  }
   return (
-    <button type="button" className="btn btn-ghost theme-btn" onClick={toggle} aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}>
-      {theme === 'dark' ? (
-        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5" fill="none" stroke="currentColor" strokeWidth="2" /><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
-      ) : (
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" /></svg>
-      )}
+    <button type="button" className="btn btn-ghost theme-btn" onClick={toggle} aria-label={label}>
+      {theme === 'dark' ? sun : moon}
     </button>
   )
 }
@@ -2569,7 +2791,7 @@ function ClearLeads({ clientId, service, count, label }) {
 }
 
 // One report per search: how many leads, messages sent, replies, no reply. Downloadable PDF with charts.
-function SearchReports({ leads, outreach, clientName }) {
+function SearchReports({ leads, outreach, clientName, showEmpty = false }) {
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const groups = useMemo(() => {
@@ -2582,7 +2804,15 @@ function SearchReports({ leads, outreach, clientName }) {
     }
     return Object.values(g).sort((a, b) => String(b.at).localeCompare(String(a.at)))
   }, [leads])
-  if (!groups.length) return null
+  if (!groups.length) {
+    if (!showEmpty) return null
+    return (
+      <section className="panel search-reports" aria-label="Search reports">
+        <div className="panel-head"><h2>Search reports</h2></div>
+        <p className="empty">No search reports yet. Save leads from a search and a report for that search appears here.</p>
+      </section>
+    )
+  }
   const stats = (gr) => {
     const ids = new Set(gr.leads.map((l) => l.id))
     const m = outreach.filter((o) => ids.has(o.lead_id))

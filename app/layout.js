@@ -1,8 +1,8 @@
-import { Instrument_Sans, Cormorant_Garamond } from 'next/font/google'
+import { Plus_Jakarta_Sans, Sora } from 'next/font/google'
 import './globals.css'
 
-const sans = Instrument_Sans({ subsets: ['latin'], display: 'swap', variable: '--font-sans' })
-const serif = Cormorant_Garamond({ subsets: ['latin'], weight: ['500', '600', '700'], display: 'swap', variable: '--font-serif' })
+const sans = Plus_Jakarta_Sans({ subsets: ['latin'], display: 'swap', variable: '--font-sans' })
+const serif = Sora({ subsets: ['latin'], weight: ['500', '600', '700'], display: 'swap', variable: '--font-serif' })
 
 export const metadata = {
   title: 'KS Tech Leads',
@@ -13,7 +13,10 @@ export const viewport = {
   width: 'device-width',
   initialScale: 1,
   viewportFit: 'cover',
-  themeColor: '#071F24',
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#F5F7FB' },
+    { media: '(prefers-color-scheme: dark)', color: '#0B1020' },
+  ],
 }
 
 export default function RootLayout({ children }) {
