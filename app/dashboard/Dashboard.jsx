@@ -422,10 +422,47 @@ export default function Dashboard({
       if (fallback) point = { lat: 23.5880, lon: 58.4060, label: 'Al Khuwair, Muscat' }
       const where = fallback ? 'Al Khuwair, Muscat (location not shared)' : point.label
 
+      const MIN_LEADS = leadsWanted
+      // Google Maps first when its key is set (fast, better coverage in Oman); the free map fills any gap
+      const useGoogle = !isDemo && Boolean(q.targets) && await lib.googleAvailable()
+      let gItems = null
+      const sameName = (n) => n.toLowerCase().replace(/[^a-z0-9]/g, '')
+      const merge = (a, b) => {
+        const seen = new Set(a.map((x) => sameName(x.name)))
+        return [...a, ...b.filter((x) => !seen.has(sameName(x.name)))].sort((x, y) => y.score - x.score || x.km - y.km)
+      }
+      const googleRound = async (dist) => {
+        const out = []
+        let next = 0, done = 0, failed = 0, lastErr = null
+        const near = q.place || point.label.split(',')[0]
+        const worker = async () => {
+          while (next < q.targets.length && !signal.aborted) {
+            const t = q.targets[next++]
+            setLive((l) => ({ ...l, status: 'loading', step: `Google Maps: searching ${t.label} (${done} of ${q.targets.length} done)` }))
+            try {
+              const found = await lib.searchGoogle({ q: `${t.label} in ${near}, Oman`, lat: point.lat, lon: point.lon, km: dist, label: t.label, signal })
+              for (const b of found) {
+                if (out.some((x) => sameName(x.name) === sameName(b.name))) continue
+                out.push({ ...b, audienceFor: q.audience, offer: t.why, score: t.score, target: t.label })
+              }
+            } catch (e) { if (signal.aborted) return; failed++; lastErr = e }
+            done++
+            setLive((l) => ({ ...l, items: [...out].sort((x, y) => y.score - x.score || x.km - y.km) }))
+          }
+        }
+        await Promise.all([worker(), worker(), worker()])
+        if (failed === q.targets.length) setLive((l) => ({ ...l, step: `Google Maps unavailable (${String(lastErr?.message || '').slice(0, 80)}), using the free map` }))
+        return out.sort((x, y) => y.score - x.score || x.km - y.km)
+      }
+
       // Search at one distance. Returns everything found there.
       const searchAt = async (dist) => {
         let items
         if (q.targets) {
+          // Google once (first distance only, to save credits); enough leads there means no need for the slow free map
+          if (useGoogle && !gItems) gItems = await googleRound(dist)
+          const gList = gItems || []
+          if (gList.length >= MIN_LEADS || signal.aborted) return gList
           // "customers for ...": small map requests, two at a time; every finished one shows its leads at once
           const classify = (found) => {
             const out = []
@@ -442,8 +479,8 @@ export default function Dashboard({
           setLive((l) => ({ ...l, status: 'loading', km: dist, step: `Searching ${q.targets.length} types of buyers within ${dist} km` }))
           const found = await lib.searchNearby({ lat: point.lat, lon: point.lon, km: dist, sel, max: 2000, asType: 'Business', signal,
             onStatus: (msg) => setLive((l) => ({ ...l, step: msg })),
-            onPartial: (part, done, total) => setLive((l) => ({ ...l, items: classify(part), step: `${done} of ${total} searches done within ${dist} km, still searching` })) })
-          items = classify(found)
+            onPartial: (part, done, total) => setLive((l) => ({ ...l, items: merge(gList, classify(part)), step: `${done} of ${total} free map searches done within ${dist} km, still searching` })) })
+          items = merge(gList, classify(found)).slice(0, 300)
         } else {
           items = await lib.searchNearby({ lat: point.lat, lon: point.lon, km: dist, sel: q.sel, cuisine: q.cuisine, max: 300, signal,
             onStatus: (msg) => setLive((l) => ({ ...l, step: msg })),
@@ -453,7 +490,6 @@ export default function Dashboard({
       }
 
       // Bring the number of leads chosen (5 to 25): if fewer are found, widen the distance automatically up to 100 km
-      const MIN_LEADS = leadsWanted
       let items = await searchAt(dist)
       let usedKm = dist
       // bigger jumps so a quiet niche does not take 12 rounds
@@ -2322,7 +2358,7 @@ function LiveResults({ live, isDemo, service, clientId, onRetry, onStop, clientN
           {msg && <p className="ok" role="status">{msg}</p>}
         </div>
       )}
-      <p className="fine">Map data: OpenStreetMap contributors.</p>
+      <p className="fine">Map data: {live.items.some((b) => b.source === "google_maps") ? "Google Maps and " : ""}OpenStreetMap contributors.</p>
     </section>
   )
 }

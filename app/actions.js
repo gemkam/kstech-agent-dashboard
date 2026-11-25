@@ -405,7 +405,7 @@ export async function addFoundLeads({ clientId, service, items, withDrafts, sear
       email: clean(b.email, 120)?.toLowerCase() || null,
       website: clean(b.website, 200),
       google_maps_url: clean(b.mapUrl, 400),
-      source: 'openstreetmap',
+      source: clean(b.source, 30) || 'openstreetmap',
       problem_found: gaps[0] || null,
       problem_evidence: gaps.length ? `Public map listing: ${gaps.join(', ').toLowerCase()}` : null,
       suggested_service: b.audienceFor ? clean(b.offer, 160) : svc === 'quotes' ? 'Quote follow-up agent' : svc === 'booking' ? 'Booking agent' : (b.website ? 'Online booking and WhatsApp ordering' : 'Website with WhatsApp ordering'),
