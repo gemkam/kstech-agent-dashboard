@@ -829,3 +829,5 @@ textarea { width: 100%; resize: vertical; line-height: 1.6; }
 }
 .btn-stop::before { content: ''; width: 0.6em; height: 0.6em; background: currentColor; border-radius: 2px; }
 .btn-stop:hover:not(:disabled) { background: #7d5f25; }
+.area-form { display: inline-flex; gap: 0.4rem; flex-wrap: wrap; align-items: center; }
+.area-form input { min-width: 12rem; }

@@ -1400,6 +1400,8 @@ function AgentBar({ client, service, isAdmin, isDemo, canSearch, searching, onSe
   const router = useRouter()
   const [locating, setLocating] = useState(false)
   const [locNote, setLocNote] = useState('')
+  const [typing, setTyping] = useState(false)
+  const [areaText, setAreaText] = useState('')
 
   async function useMyLocation() {
     setLocNote('')
@@ -1461,6 +1463,32 @@ function AgentBar({ client, service, isAdmin, isDemo, canSearch, searching, onSe
             <button type="button" className="btn btn-plain loc-btn" onClick={useMyLocation} disabled={locating || running}>
               {locating ? 'Finding you...' : client.base_area ? 'Update location' : 'Use my location'}
             </button>
+          )}
+          {!isDemo && !typing && (
+            <button type="button" className="btn btn-plain loc-btn" onClick={() => { setTyping(true); setAreaText('') }} disabled={running}>
+              Type area
+            </button>
+          )}
+          {!isDemo && typing && (
+            <form className="area-form" onSubmit={async (e) => {
+              e.preventDefault()
+              const a = areaText.trim()
+              if (!a) return
+              setLocating(true)
+              // check the map knows this place before saving it
+              const lib = await import('@/lib/liveSearch')
+              const pt = await lib.geocode(a).catch(() => null)
+              if (!pt) { setLocating(false); setLocNote(`"${a}" was not found on the map. Check the spelling, e.g. Al Khuwair, Ruwi, Seeb.`); return }
+              const res = await setBaseArea({ clientId: client.id, area: pt.label || a })
+              setLocating(false)
+              setTyping(false)
+              setLocNote(res?.error || `Searches now start from ${pt.label || a}.`)
+              router.refresh()
+            }}>
+              <input value={areaText} onChange={(e) => setAreaText(e.target.value)} placeholder="e.g. Ruwi, Seeb, Sohar" aria-label="Area to search from" autoFocus />
+              <button type="submit" className="btn btn-brass" disabled={locating || !areaText.trim()}>Save</button>
+              <button type="button" className="btn btn-plain" onClick={() => setTyping(false)}>Cancel</button>
+            </form>
           )}
           <label className="radius">
             <span className="sr-only">Search distance</span>
