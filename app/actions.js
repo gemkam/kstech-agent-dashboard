@@ -413,6 +413,7 @@ export async function addFoundLeads({ clientId, service, items, withDrafts, sear
       score: Number.isFinite(Number(b.score)) ? Math.max(1, Math.min(10, Math.round(Number(b.score)))) : null,
       status: 'new',
       search_run_id: runId || null,
+      email_source: b.email ? clean([b.emailHow, b.emailFrom].filter(Boolean).join(': '), 300) : null,
       search_label: clean(searchLabel, 160),
     }
     const { data: lead, error } = await supabase.from('leads').insert(row).select('id, ref_code, duplicate_of, do_not_contact').single()
@@ -421,7 +422,8 @@ export async function addFoundLeads({ clientId, service, items, withDrafts, sear
     if (lead.duplicate_of) dup++
     if (!withDrafts) continue
     if (lead.do_not_contact) { blocked++; continue }
-    const channel = row.phone ? 'whatsapp' : row.email ? 'email' : null
+    // email first when one was found, otherwise WhatsApp
+    const channel = row.email ? 'email' : row.phone ? 'whatsapp' : null
     if (!channel) continue
     const langs = b.audienceFor ? ['en'] : /pakistan|lahori|karachi|kolachi|peshawari|multani/i.test(`${name} ${b.cuisine || ''}`) ? ['en', 'ur'] : ['en']
     for (const lang of langs) {

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { geocode, fetchOverpassOn } from '@/lib/liveSearch'
+import { findEmail } from '@/lib/emailFinder'
 
 // Server side of the live map search. Signed-in users only.
 export const maxDuration = 60
@@ -28,9 +29,14 @@ export async function POST(request) {
       }
       return NextResponse.json({ data: await fetchOverpassOn(query, body.server) })
     }
+    // Find a business's email: own website first, then web search
+    if (body.action === 'email') {
+      const r = await findEmail({ name: String(body.name || '').slice(0, 120), website: body.website ? String(body.website).slice(0, 300) : null, area: String(body.area || '').slice(0, 80) })
+      return NextResponse.json(r)
+    }
     // Which extra sources have keys set in Vercel (no key values are sent)
     if (body.action === 'sources') {
-      return NextResponse.json({ google: Boolean(process.env.SERPER_API_KEY) })
+      return NextResponse.json({ google: Boolean(process.env.SERPER_API_KEY), tavily: Boolean(process.env.TAVILY_API_KEY), tomtom: Boolean(process.env.TOMTOM_API_KEY) })
     }
     // Google Maps listings through Serper (needs SERPER_API_KEY; each call uses 3 of its credits)
     if (body.action === 'gmaps') {

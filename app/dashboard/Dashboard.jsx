@@ -507,6 +507,28 @@ export default function Dashboard({
       const totalFound = items.length
       items = q.targets ? lib.pickPerType(items) : items.slice(0, MIN_LEADS) // best matches first, as many as asked for
 
+      // Emails: maps never list them, so the agent looks each one up (own website, then web search)
+      if (!signal.aborted && !isDemo && items.some((b) => !b.email)) {
+        let next = 0, done = 0
+        const list = items.map((b) => ({ ...b }))
+        const todo = list.filter((b) => !b.email)
+        setLive((l) => ({ ...l, status: 'loading', items: list, step: `Finding emails (0 of ${todo.length})` }))
+        const worker = async () => {
+          while (next < todo.length && !signal.aborted) {
+            const b = todo[next++]
+            try {
+              const r = await lib.findEmailFor(b, signal)
+              if (r?.email) { b.email = r.email; b.emailFrom = r.from || null; b.emailHow = r.how || null }
+              if (r?.website && !b.website) b.website = r.website
+            } catch { /* keep going */ }
+            done++
+            setLive((l) => ({ ...l, items: [...list], step: `Finding emails (${done} of ${todo.length}, ${list.filter((x) => x.email).length} found)` }))
+          }
+        }
+        await Promise.all([worker(), worker(), worker()])
+        items = list
+      }
+
       const stopped = signal.aborted
       setLive({ status: 'done', items, where, label: q.label, km: usedKm, near: point.label, stopped, runId, searchLabel, expandedFrom: expanded ? dist : null, wanted: MIN_LEADS, totalFound, startedAt, endedAt: Date.now() })
       await finish(`${stopped ? 'Stopped early. ' : ''}Found ${items.length} ${q.label} near ${point.label} (${usedKm} km${expanded ? `, widened from ${dist} km` : ''})`)
@@ -2331,6 +2353,8 @@ function LiveResults({ live, isDemo, service, clientId, onRetry, onStop, clientN
                   <span className="sub">{b.type}{b.area ? `, ${b.area}` : ''}, {b.km < 1 ? `${Math.round(b.km * 1000)} m` : `${b.km.toFixed(1)} km`} away</span>
                   {(isDemo || b.audienceFor) && <span className="live-offer">{b.audienceFor ? 'Why they buy' : 'Fit'}: {b.offer}</span>}
                   {!isDemo && (b.phone || b.email) && <span className="live-offer">{[b.phone, b.email].filter(Boolean).join(', ')}</span>}
+                  {!isDemo && b.email && b.emailFrom && <a className="sub" href={b.emailFrom} target="_blank" rel="noreferrer">Email found on: {b.emailHow || 'web'}</a>}
+                  {!isDemo && !b.email && live.status === 'done' && <span className="sub">No public email found</span>}
                   {b.gaps.length > 0 && (
                     <span className="tags">{b.gaps.map((g) => <span key={g} className="tag tag-due">{g}</span>)}</span>
                   )}
