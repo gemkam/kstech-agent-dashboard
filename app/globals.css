@@ -831,3 +831,9 @@ textarea { width: 100%; resize: vertical; line-height: 1.6; }
 .btn-stop:hover:not(:disabled) { background: #7d5f25; }
 .area-form { display: inline-flex; gap: 0.4rem; flex-wrap: wrap; align-items: center; }
 .area-form input { min-width: 12rem; }
+.buyer-types { display: flex; flex-direction: column; gap: 0.45rem; margin: 0.6rem 0; }
+.buyer-types .chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.buyer-types select { max-width: 28rem; }
+.chip-on { display: inline-flex; align-items: center; gap: 0.35rem; border: 1px solid var(--gold); color: var(--gold-bright); background: var(--gold-soft); padding: 0.3rem 0.4rem 0.3rem 0.7rem; border-radius: 999px; font-size: 0.9rem; }
+.chip-x { background: none; border: 0; color: inherit; font-size: 1.05rem; line-height: 1; cursor: pointer; padding: 0 0.2rem; }
+.chip-x:disabled { opacity: 0.4; cursor: default; }

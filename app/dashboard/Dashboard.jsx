@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { AUDIENCES, BUYER_TYPES, MAX_TYPES } from '@/lib/liveSearch'
 import {
   addCompany,
   clearLeads,
@@ -2368,30 +2369,58 @@ function LiveResults({ live, isDemo, service, clientId, onRetry, onStop, clientN
 }
 
 // Admin: one dropdown. Pick your client's niche, the agent finds the businesses that buy from it.
-const AUDIENCE_NAMES = ['travel agencies', 'rent a car', 'facility management and cleaning', 'printing and signage', 'IT and CCTV',
-  'corporate catering', 'training institutes', 'manpower and recruitment', 'pest control', 'office furniture']
+const AUDIENCE_NAMES = Object.keys(AUDIENCES)
 
 function SearchHelp({ area, km, disabled, onPick, audiences, niche, searching, onStop }) {
   const [pick, setPick] = useState(audiences.includes(niche) ? niche : '')
-  useEffect(() => { setPick(audiences.includes(niche) ? niche : '') }, [niche, audiences])
-  const q = (what) => `find customers for ${what} near ${area} +${km} km`
+  const presetFor = (n) => (AUDIENCES[n] || []).map(([c]) => c)
+  const [types, setTypes] = useState(presetFor(audiences.includes(niche) ? niche : ''))
+  const [adding, setAdding] = useState('')
+  useEffect(() => { const n = audiences.includes(niche) ? niche : ''; setPick(n); setTypes(presetFor(n)) }, [niche, audiences])
+  const changed = pick && types.join('|') !== presetFor(pick).join('|')
+  const q = (what) => `find customers for ${what} near ${area} +${km} km${changed ? ` types: ${types.join('; ')}` : ''}`
+  const cap = (t) => t[0].toUpperCase() + t.slice(1)
   return (
     <div className="search-help">
       <label className="audience-pick">
         <span className="sub">Find customers for</span>
         <select value={pick} disabled={disabled} aria-label="Find customers for"
-          onChange={(e) => setPick(e.target.value)}>
+          onChange={(e) => { setPick(e.target.value); setTypes(presetFor(e.target.value)) }}>
           <option value="">Choose a niche...</option>
-          {audiences.map((a) => <option key={a} value={a}>{a[0].toUpperCase() + a.slice(1)}</option>)}
+          {audiences.map((a) => <option key={a} value={a}>{cap(a)}</option>)}
         </select>
       </label>
+      {pick && (
+        <div className="buyer-types" aria-label="Target audience">
+          <span className="sub">Target audience ({types.length} of {MAX_TYPES}, 2 leads each)</span>
+          <div className="chips">
+            {types.map((t) => (
+              <span key={t} className="chip chip-on">
+                {cap(t)}
+                <button type="button" className="chip-x" disabled={disabled || types.length <= 1} aria-label={`Remove ${t}`}
+                  onClick={() => setTypes(types.filter((x) => x !== t))}>×</button>
+              </span>
+            ))}
+          </div>
+          {types.length < MAX_TYPES ? (
+            <select value={adding} disabled={disabled} aria-label="Add a target audience"
+              onChange={(e) => { const v = e.target.value; if (v) setTypes([...types, v]); setAdding('') }}>
+              <option value="">+ Add a target audience...</option>
+              {BUYER_TYPES.filter((b) => !types.includes(b) && b !== pick).map((b) => <option key={b} value={b}>{cap(b)}</option>)}
+            </select>
+          ) : (
+            <span className="sub">Maximum is {MAX_TYPES}. Remove one (×) to add another.</span>
+          )}
+          {changed && <button type="button" className="link-btn small" disabled={disabled} onClick={() => setTypes(presetFor(pick))}>Back to the default 4</button>}
+        </div>
+      )}
       <div className="search-buttons">
-        <button type="button" className="btn btn-brass" disabled={disabled || !pick} onClick={() => onPick(q(pick))}>
+        <button type="button" className="btn btn-brass" disabled={disabled || !pick || !types.length} onClick={() => onPick(q(pick))}>
           {searching ? 'Searching...' : 'Start search'}
         </button>
         {searching && <button type="button" className="btn btn-stop" onClick={onStop}>Stop search</button>}
       </div>
-      <p className="sub">The agent searches every type of business that buys from this niche, within {km} km of {area}, and gives each lead its reason.</p>
+      <p className="sub">The agent finds the best 2 businesses for each target audience, within {km} km of {area} (wider if needed), and gives each lead its reason.</p>
     </div>
   )
 }
