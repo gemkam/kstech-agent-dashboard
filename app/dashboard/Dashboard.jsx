@@ -503,31 +503,78 @@ export default function Dashboard({
         usedKm = km
         if (more.length >= items.length) items = more
       }
-      const expanded = usedKm !== dist
-      const totalFound = items.length
-      items = q.targets ? lib.pickPerType(items) : items.slice(0, MIN_LEADS) // best matches first, as many as asked for
+      let totalFound = items.length
 
-      // Emails: maps never list them, so the agent looks each one up (own website, then web search)
-      if (!signal.aborted && !isDemo && items.some((b) => !b.email)) {
-        let next = 0, done = 0
-        const list = items.map((b) => ({ ...b }))
-        const todo = list.filter((b) => !b.email)
-        setLive((l) => ({ ...l, status: 'loading', items: list, step: `Finding emails (0 of ${todo.length})` }))
-        const worker = async () => {
-          while (next < todo.length && !signal.aborted) {
-            const b = todo[next++]
-            try {
-              const r = await lib.findEmailFor(b, signal)
-              if (r?.email) { b.email = r.email; b.emailFrom = r.from || null; b.emailHow = r.how || null }
-              if (r?.website && !b.website) b.website = r.website
-            } catch { /* keep going */ }
-            done++
-            setLive((l) => ({ ...l, items: [...list], step: `Finding emails (${done} of ${todo.length}, ${list.filter((x) => x.email).length} found)` }))
-          }
-        }
-        await Promise.all([worker(), worker(), worker()])
-        items = list
+      const lookUp = async (b) => {
+        try {
+          const r = await lib.findEmailFor(b, signal)
+          if (r?.email) { b.email = r.email; b.emailFrom = r.from || null; b.emailHow = r.how || null }
+          if (r?.website && !b.website) b.website = r.website
+        } catch { /* keep going */ }
+        b.checked = true
       }
+
+      if (q.targets && !isDemo) {
+        // EMAIL REQUIRED: per buyer type, check up to 6 businesses (best first) and keep the first 2 with a proper email.
+        // If a type runs out, widen the distance and check new businesses.
+        const MAX_CHECKS = 6
+        const pool = items.map((b) => ({ ...b }))
+        const checks = {}
+        const kept = () => q.targets.map((t) => pool.filter((b) => b.target === t.label && b.email).slice(0, lib.PER_TYPE))
+        const keptCount = () => kept().flat().length
+        const show = () => setLive((l) => ({ ...l, status: 'loading', items: kept().flat(),
+          step: `Finding proper emails: ${keptCount()} of ${MIN_LEADS} leads ready (${Object.values(checks).reduce((a, n) => a + n, 0)} businesses checked)` }))
+        const round = async () => {
+          const jobs = []
+          for (const t of q.targets) {
+            const have = pool.filter((b) => b.target === t.label && b.email).length
+            const need = lib.PER_TYPE - have
+            if (need <= 0) continue
+            const left = MAX_CHECKS - (checks[t.label] || 0)
+            const cand = lib.pickPerType(pool.filter((b) => b.target === t.label && !b.checked), 99).slice(0, Math.min(left, need + 1))
+            for (const b of cand) { checks[t.label] = (checks[t.label] || 0) + 1; jobs.push(b) }
+          }
+          let next = 0
+          const worker = async () => { while (next < jobs.length && !signal.aborted) { await lookUp(jobs[next++]); show() } }
+          await Promise.all([worker(), worker(), worker()])
+          return jobs.length
+        }
+        show()
+        const radii = [10, 20, 35, 55, 75, 100].filter((k) => k > usedKm)
+        while (!signal.aborted && keptCount() < MIN_LEADS) {
+          const did = await round()
+          if (keptCount() >= MIN_LEADS || signal.aborted) break
+          if (did > 0) continue
+          // every type has used its checks here or has no more businesses: widen once and try new ones
+          const km = radii.shift()
+          if (!km || Object.values(checks).every((n) => n >= MAX_CHECKS)) break
+          setLive((l) => ({ ...l, step: `Not enough proper emails within ${usedKm} km, widening to ${km} km` }))
+          const more = await searchAt(km)
+          usedKm = km
+          const seen = new Set(pool.map((b) => b.name.toLowerCase()))
+          for (const b of more) if (!seen.has(b.name.toLowerCase())) pool.push({ ...b })
+          totalFound = pool.length
+        }
+        items = kept().flat()
+      } else {
+        items = q.targets ? lib.pickPerType(items) : items.slice(0, MIN_LEADS) // best matches first, as many as asked for
+        // Other searches: look up emails for what was found, keep everything
+        if (!signal.aborted && !isDemo && items.some((b) => !b.email)) {
+          const list = items.map((b) => ({ ...b }))
+          const todo = list.filter((b) => !b.email)
+          let next = 0, done = 0
+          setLive((l) => ({ ...l, status: 'loading', items: list, step: `Finding emails (0 of ${todo.length})` }))
+          const worker = async () => {
+            while (next < todo.length && !signal.aborted) {
+              await lookUp(todo[next++]); done++
+              setLive((l) => ({ ...l, items: [...list], step: `Finding emails (${done} of ${todo.length}, ${list.filter((x) => x.email).length} found)` }))
+            }
+          }
+          await Promise.all([worker(), worker(), worker()])
+          items = list
+        }
+      }
+      const expanded = usedKm !== dist
 
       const stopped = signal.aborted
       setLive({ status: 'done', items, where, label: q.label, km: usedKm, near: point.label, stopped, runId, searchLabel, expandedFrom: expanded ? dist : null, wanted: MIN_LEADS, totalFound, startedAt, endedAt: Date.now() })
@@ -2334,6 +2381,9 @@ function LiveResults({ live, isDemo, service, clientId, onRetry, onStop, clientN
       {live.status === 'done' && live.totalFound > live.items.length && <p className="muted small">{live.items.some((b) => b.audienceFor)
         ? `Showing the best 2 for each type of buyer (${live.items.length} of ${live.totalFound} found), with phone and website first.`
         : `Showing the best ${live.items.length} of ${live.totalFound} found. Choose more leads per search to see more.`}</p>}
+      {live.status === 'done' && !isDemo && live.items.some((b) => b.audienceFor) && live.items.length < live.wanted && (
+        <p className="muted small">Only {live.items.length} of {live.wanted} leads have a proper email (named person or department, not info@ or contact@). Businesses without one were left out. Try a bigger distance or change a target audience.</p>
+      )}
       {live.stopped && <p className="muted small">Search stopped. Showing the {live.items.length} found before you stopped it.</p>}
       {live.status === 'done' && live.items.length === 0 && (
         <p className="empty">No listed {live.label || 'businesses'} found here. Try a bigger distance, e.g. +20 km.</p>
