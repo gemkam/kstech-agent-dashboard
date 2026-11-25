@@ -422,7 +422,9 @@ export default function Dashboard({
       if (fallback) point = { lat: 23.5880, lon: 58.4060, label: 'Al Khuwair, Muscat' }
       const where = fallback ? 'Al Khuwair, Muscat (location not shared)' : point.label
 
-      const MIN_LEADS = leadsWanted
+      // "Find customers for": 2 per buyer type (e.g. 4 types = 8 leads). Other searches: the number chosen.
+      const MIN_LEADS = q.targets ? q.targets.length * lib.PER_TYPE : leadsWanted
+      const enough = (list) => (q.targets ? lib.pickPerType(list).length : list.length) >= MIN_LEADS
       // Google Maps first when its key is set (fast, better coverage in Oman); the free map fills any gap
       const useGoogle = !isDemo && Boolean(q.targets) && await lib.googleAvailable()
       let gItems = null
@@ -462,7 +464,7 @@ export default function Dashboard({
           // Google once (first distance only, to save credits); enough leads there means no need for the slow free map
           if (useGoogle && !gItems) gItems = await googleRound(dist)
           const gList = gItems || []
-          if (gList.length >= MIN_LEADS || signal.aborted) return gList
+          if (enough(gList) || signal.aborted) return gList
           // "customers for ...": small map requests, two at a time; every finished one shows its leads at once
           const classify = (found) => {
             const out = []
@@ -494,7 +496,7 @@ export default function Dashboard({
       let usedKm = dist
       // bigger jumps so a quiet niche does not take 12 rounds
       for (const km of [10, 20, 35, 55, 75, 100].filter((k) => k > dist)) {
-        if (items.length >= MIN_LEADS || signal.aborted) break
+        if (enough(items) || signal.aborted) break
         setLive((l) => ({ ...l, status: 'loading', step: `Only ${items.length} found within ${usedKm} km, widening to ${km} km` }))
         const more = await searchAt(km)
         usedKm = km
@@ -502,7 +504,7 @@ export default function Dashboard({
       }
       const expanded = usedKm !== dist
       const totalFound = items.length
-      items = items.slice(0, MIN_LEADS) // best matches first, as many as asked for
+      items = q.targets ? lib.pickPerType(items) : items.slice(0, MIN_LEADS) // best matches first, as many as asked for
 
       const stopped = signal.aborted
       setLive({ status: 'done', items, where, label: q.label, km: usedKm, near: point.label, stopped, runId, searchLabel, expandedFrom: expanded ? dist : null, wanted: MIN_LEADS, totalFound, startedAt, endedAt: Date.now() })
@@ -2306,7 +2308,9 @@ function LiveResults({ live, isDemo, service, clientId, onRetry, onStop, clientN
       )}
       {live.status === 'error' && <p className="error">The live map search is busy right now. Try "Search again" in a moment.{live.reason ? ` (${live.reason})` : ''}</p>}
       {live.status === 'done' && live.expandedFrom != null && <p className="muted small">Fewer than {live.wanted} found within {live.expandedFrom} km, so the agent widened the search to {live.km} km.</p>}
-      {live.status === 'done' && live.totalFound > live.items.length && <p className="muted small">Showing the best {live.items.length} of {live.totalFound} found. Choose more leads per search to see more.</p>}
+      {live.status === 'done' && live.totalFound > live.items.length && <p className="muted small">{live.items.some((b) => b.audienceFor)
+        ? `Showing the best 2 for each type of buyer (${live.items.length} of ${live.totalFound} found), with phone and website first.`
+        : `Showing the best ${live.items.length} of ${live.totalFound} found. Choose more leads per search to see more.`}</p>}
       {live.stopped && <p className="muted small">Search stopped. Showing the {live.items.length} found before you stopped it.</p>}
       {live.status === 'done' && live.items.length === 0 && (
         <p className="empty">No listed {live.label || 'businesses'} found here. Try a bigger distance, e.g. +20 km.</p>
