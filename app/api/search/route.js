@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { geocode, fetchOverpass } from '@/lib/liveSearch'
+import { geocode, fetchOverpassOn } from '@/lib/liveSearch'
 
 // Server side of the live map search. Signed-in users only.
 export const maxDuration = 60
@@ -26,7 +26,7 @@ export async function POST(request) {
       if (!query.startsWith('[out:json]') || query.length > 4000) {
         return NextResponse.json({ error: 'Bad query.' }, { status: 400 })
       }
-      return NextResponse.json({ data: await fetchOverpass(query) })
+      return NextResponse.json({ data: await fetchOverpassOn(query, body.server) })
     }
     return NextResponse.json({ error: 'Unknown action.' }, { status: 400 })
   } catch (e) {

@@ -426,22 +426,27 @@ export default function Dashboard({
       const searchAt = async (dist) => {
         let items
         if (q.targets) {
-          // "customers for ...": ONE map request for all buyer niches, then each result gets its niche and reason
-          setLive((l) => ({ ...l, status: 'loading', step: `Searching ${q.targets.length} types of buyers within ${dist} km` }))
-          const sel = [...new Set(q.targets.flatMap((t) => t.sel))]
-          const found = await lib.searchNearby({ lat: point.lat, lon: point.lon, km: dist, sel, max: 2000, asType: 'Business', signal, oneQuery: true })
-          items = []
-          for (const b of found) {
-            const t = q.targets.find((x) => x.sel.some((one) => lib.matchSel(b.tags, one)))
-            if (!t) continue
-            const vague = !b.type || b.type === 'Business' || b.type === 'Office' || b.type === 'Company office'
-            items.push({ ...b, tags: undefined, type: vague ? t.label[0].toUpperCase() + t.label.slice(1) : b.type,
-              audienceFor: q.audience, offer: t.why, score: t.score, target: t.label })
+          // "customers for ...": small map requests, two at a time; every finished one shows its leads at once
+          const classify = (found) => {
+            const out = []
+            for (const b of found) {
+              const t = q.targets.find((x) => x.sel.some((one) => lib.matchSel(b.tags, one)))
+              if (!t) continue
+              const vague = !b.type || b.type === 'Business' || b.type === 'Office' || b.type === 'Company office'
+              out.push({ ...b, type: vague ? t.label[0].toUpperCase() + t.label.slice(1) : b.type,
+                audienceFor: q.audience, offer: t.why, score: t.score, target: t.label })
+            }
+            return out.sort((a, b) => b.score - a.score || a.km - b.km).slice(0, 300)
           }
-          items.sort((a, b) => b.score - a.score || a.km - b.km)
-          items = items.slice(0, 300)
+          const sel = [...new Set(q.targets.flatMap((t) => t.sel))]
+          setLive((l) => ({ ...l, status: 'loading', km: dist, step: `Searching ${q.targets.length} types of buyers within ${dist} km` }))
+          const found = await lib.searchNearby({ lat: point.lat, lon: point.lon, km: dist, sel, max: 2000, asType: 'Business', signal,
+            onStatus: (msg) => setLive((l) => ({ ...l, step: msg })),
+            onPartial: (part, done, total) => setLive((l) => ({ ...l, items: classify(part), step: `${done} of ${total} searches done within ${dist} km, still searching` })) })
+          items = classify(found)
         } else {
           items = await lib.searchNearby({ lat: point.lat, lon: point.lon, km: dist, sel: q.sel, cuisine: q.cuisine, max: 300, signal,
+            onStatus: (msg) => setLive((l) => ({ ...l, step: msg })),
             onPartial: (part) => setLive((l) => ({ ...l, items: part, step: `${part.length} found so far, still searching` })) })
         }
         return items
