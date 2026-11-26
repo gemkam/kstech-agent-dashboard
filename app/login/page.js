@@ -4,6 +4,16 @@ import { Suspense, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 
+// Short usernames for sign in. Anything with an @ is used as an email as before.
+const USERNAMES = {
+  kamran: 'kzstech000@gmail.com',
+  demo: 'demo@kstech.om',
+}
+const toEmail = (v) => {
+  const t = String(v || '').trim()
+  return t.includes('@') ? t : (USERNAMES[t.toLowerCase()] || `${t.toLowerCase()}@kstech.om`)
+}
+
 function LoginForm() {
   const router = useRouter()
   const params = useSearchParams()
@@ -19,10 +29,10 @@ function LoginForm() {
     setError('')
     setLoading(true)
     const supabase = createClient()
-    const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password })
+    const { error } = await supabase.auth.signInWithPassword({ email: toEmail(email), password })
     setLoading(false)
     if (error) {
-      setError('Email or password is incorrect. Check both and try again.')
+      setError('Username or password is incorrect. Check both and try again.')
       return
     }
     router.push('/dashboard')
@@ -60,8 +70,8 @@ function LoginForm() {
             <p className="muted">See the businesses we found for you, what was sent, and who replied.</p>
             <form onSubmit={handleSignIn} className="login-form">
               <label>
-                Email
-                <input type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
+                Username
+                <input type="text" autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} required value={email} onChange={(e) => setEmail(e.target.value)} />
               </label>
               <label>
                 Password
