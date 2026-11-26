@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { geocode, fetchOverpassOn } from '@/lib/liveSearch'
 import { findEmail } from '@/lib/emailFinder'
+import { searchYellowPagesOn } from '@/lib/yellowPages'
 
 // Server side of the live map search. Signed-in users only.
 export const maxDuration = 60
@@ -36,7 +37,14 @@ export async function POST(request) {
     }
     // Which extra sources have keys set in Vercel (no key values are sent)
     if (body.action === 'sources') {
-      return NextResponse.json({ google: Boolean(process.env.SERPER_API_KEY), tavily: Boolean(process.env.TAVILY_API_KEY), tomtom: Boolean(process.env.TOMTOM_API_KEY) })
+      return NextResponse.json({ google: Boolean(process.env.SERPER_API_KEY), tavily: Boolean(process.env.TAVILY_API_KEY), tomtom: Boolean(process.env.TOMTOM_API_KEY), yellowpages: true })
+    }
+    // Yellow Pages Oman search (free, no key). Read-only: one public results page per call.
+    if (body.action === 'yp') {
+      const q = String(body.q || '').replace(/[^\w\s&'\-\u0600-\u06FF]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80)
+      if (!q) return NextResponse.json({ error: 'No search words given.' }, { status: 400 })
+      const page = Math.max(1, Math.min(5, Number(body.page) || 1))
+      return NextResponse.json(await searchYellowPagesOn(q, page))
     }
     // Google Maps listings through Serper (needs SERPER_API_KEY; each call uses 3 of its credits)
     if (body.action === 'gmaps') {

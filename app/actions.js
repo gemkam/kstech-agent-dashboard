@@ -434,7 +434,7 @@ export async function addFoundLeads({ clientId, service, items, withDrafts, sear
       problem_found: gaps[0] || null,
       problem_evidence: gaps.length ? `Public map listing: ${gaps.join(', ').toLowerCase()}` : null,
       suggested_service: b.audienceFor ? clean(b.offer, 160) : svc === 'quotes' ? 'Quote follow-up agent' : svc === 'booking' ? 'Booking agent' : (b.website ? 'Online booking and WhatsApp ordering' : 'Website with WhatsApp ordering'),
-      why_chosen: b.audienceFor ? `${b.type || 'Business'}, a likely buyer for ${clean(b.audienceFor, 60)}: ${clean(b.offer, 160)}. About ${Number(b.km || 0).toFixed(1)} km from ${searchedNear || 'the search area'}.` : `${b.type || 'Business'} about ${Number(b.km || 0).toFixed(1)} km from ${searchedNear || 'the search area'}.${gaps.length ? ' ' + gaps.join('. ') + '.' : ''}`,
+      why_chosen: b.audienceFor ? `${b.type || 'Business'}, a likely buyer for ${clean(b.audienceFor, 60)}: ${clean(b.offer, 160)}. ${b.km == null ? 'Listed on Yellow Pages Oman.' : `About ${Number(b.km).toFixed(1)} km from ${searchedNear || 'the search area'}.`}` : `${b.type || 'Business'} ${b.km == null ? 'listed on Yellow Pages Oman' : `about ${Number(b.km).toFixed(1)} km from ${searchedNear || 'the search area'}`}.${gaps.length ? ' ' + gaps.join('. ') + '.' : ''}`,
       score: Number.isFinite(Number(b.score)) ? Math.max(1, Math.min(10, Math.round(Number(b.score)))) : null,
       status: 'new',
       search_run_id: runId || null,

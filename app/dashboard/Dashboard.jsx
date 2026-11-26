@@ -436,6 +436,31 @@ export default function Dashboard({
       // Google Maps first when its key is set (fast, better coverage in Oman); the free map fills any gap
       const useGoogle = !isDemo && Boolean(q.targets) && await lib.googleAvailable()
       let gItems = null
+      // Yellow Pages Oman: free, no key, real phone numbers. Searched once per run, merged with the map results
+      const useYP = !isDemo
+      let ypItems = null
+      const ypRound = async () => {
+        const out = []
+        const near = q.place || point.label.split(',')[0]
+        const jobs = q.targets
+          ? q.targets.map((t) => ({ words: t.label, label: t.label, why: t.why, score: t.score }))
+          : [{ words: q.label === 'businesses' ? (text.replace(/\b(find|search|near|in|around|at)\b.*$/i, '').trim() || 'companies') : q.label, label: q.label === 'businesses' ? null : q.label }]
+        let done = 0, failed = 0
+        for (const j of jobs) {
+          if (signal.aborted) break
+          setLive((l) => ({ ...l, status: 'loading', step: `Yellow Pages: searching ${j.words} (${done} of ${jobs.length} done)` }))
+          try {
+            const got = fresh(await lib.searchYellowPages({ q: j.words, label: j.label, area: near, signal, pages: 2 }))
+            for (const b of got) {
+              if (out.some((x) => sameName(x.name) === sameName(b.name))) continue
+              out.push(q.targets ? { ...b, audienceFor: q.audience, offer: j.why, score: j.score, target: j.label } : b)
+            }
+          } catch (e) { if (signal.aborted) break; failed++ }
+          done++
+        }
+        if (failed && failed === jobs.length) setLive((l) => ({ ...l, step: 'Yellow Pages is busy right now, using the other sources' }))
+        return out
+      }
       const sameName = (n) => n.toLowerCase().replace(/[^a-z0-9]/g, '')
       const merge = (a, b) => {
         const seen = new Set(a.map((x) => sameName(x.name)))
@@ -476,7 +501,8 @@ export default function Dashboard({
         if (q.targets) {
           // Google once (first distance only, to save credits); enough leads there means no need for the slow free map
           if (useGoogle && !gItems) gItems = await googleRound(dist)
-          const gList = gItems || []
+          if (useYP && !ypItems) ypItems = await ypRound()
+          const gList = merge(gItems || [], ypItems || [])
           if (enough(gList) || signal.aborted) return gList
           // "customers for ...": small map requests, two at a time; every finished one shows its leads at once
           const classify = (found) => {
@@ -497,9 +523,12 @@ export default function Dashboard({
             onPartial: (part, done, total) => setLive((l) => ({ ...l, items: merge(gList, classify(part)), step: `${done} of ${total} free map searches done within ${dist} km, still searching` })) })
           items = merge(gList, fresh(classify(found))).slice(0, 300)
         } else {
+          if (useYP && !ypItems) ypItems = await ypRound()
+          const ypList = ypItems || []
           items = await lib.searchNearby({ lat: point.lat, lon: point.lon, km: dist, sel: q.sel, cuisine: q.cuisine, max: 600, signal,
             onStatus: (msg) => setLive((l) => ({ ...l, step: msg })),
-            onPartial: (part) => setLive((l) => ({ ...l, items: part, step: `${part.length} found so far, still searching` })) })
+            onPartial: (part) => setLive((l) => ({ ...l, items: merge(ypList, part), step: `${part.length + ypList.length} found so far, still searching` })) })
+          items = merge(ypList, items)
         }
         return q.targets ? items : fresh(items)
       }
@@ -1943,6 +1972,7 @@ function Approvals({ drafts, approved, leadById, isAdmin, onOpen, onApproveAll, 
 
 const SOURCE_LABEL = {
   google_maps: 'Google Maps listing and customer reviews',
+  yellow_pages: 'Yellow Pages Oman listing',
   kudos_center_list: 'Official KUDOS/IC3 testing centre list',
 }
 
@@ -2489,6 +2519,7 @@ function AddLeadForm({ clientId, service, onDone, onOpenLead }) {
           <span>Found via</span>
           <select value={f.source} onChange={set('source')}>
             <option value="google_maps">Google Maps and reviews</option>
+            <option value="yellow_pages">Yellow Pages Oman</option>
             <option value="instagram">Instagram</option>
             <option value="website">Their website</option>
             <option value="visit">In-person visit</option>
@@ -2638,7 +2669,7 @@ function LiveResults({ live, isDemo, service, clientId, onRetry, onStop, clientN
                 )}
                 <div className="live-main">
                   <a className="biz" href={b.mapUrl} target="_blank" rel="noreferrer">{b.name}</a>
-                  <span className="sub">{b.type}{b.area ? `, ${b.area}` : ''}, {b.km < 1 ? `${Math.round(b.km * 1000)} m` : `${b.km.toFixed(1)} km`} away</span>
+                  <span className="sub">{b.type}{b.area ? `, ${b.area}` : ''}, {b.km == null ? 'from Yellow Pages Oman' : b.km < 1 ? `${Math.round(b.km * 1000)} m away` : `${b.km.toFixed(1)} km away`}</span>
                   {(isDemo || b.audienceFor) && <span className="live-offer">{b.audienceFor ? 'Why they buy' : 'Fit'}: {b.offer}</span>}
                   {!isDemo && (b.phone || b.email) && <span className="live-offer">{[b.phone, b.email].filter(Boolean).join(', ')}</span>}
                   {!isDemo && b.email && b.emailFrom && <a className="sub" href={b.emailFrom} target="_blank" rel="noreferrer">Email found on: {b.emailHow || 'web'}</a>}
@@ -2675,7 +2706,7 @@ function LiveResults({ live, isDemo, service, clientId, onRetry, onStop, clientN
           {msg && <p className="ok" role="status">{msg}</p>}
         </div>
       )}
-      <p className="fine">Map data: {live.items.some((b) => b.source === "google_maps") ? "Google Maps and " : ""}OpenStreetMap contributors.</p>
+      <p className="fine">Data: {live.items.some((b) => b.source === "google_maps") ? "Google Maps, " : ""}{live.items.some((b) => b.source === "yellow_pages") ? "Yellow Pages Oman, " : ""}OpenStreetMap contributors.</p>
     </section>
   )
 }
